@@ -1,7 +1,7 @@
 name: Daily digest email
 
 # 7am Sydney every day: one email to Joshua, Will and Billy summarising both checks since the last email
-# (yesterday's 12pm run and this morning's 2am run). Missing runs are reported in the email.
+# (yesterday's 12pm run and this morning's 1am run). If a check is still running at 7am, it waits up to an hour for it. Missing runs are reported in the email.
 on:
   schedule:
     - cron: "0 20 * * *"   # 7am AEDT
@@ -16,7 +16,7 @@ permissions:
 jobs:
   digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 80
     steps:
       - name: Only at 7am Sydney
         id: gate
@@ -29,6 +29,16 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         with:
           python-version: "3.12"
+      - name: Wait for a check that is still running (up to 60 minutes)
+        if: steps.gate.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 60); do
+            N=$(gh run list --workflow sync.yml --status in_progress --json databaseId --jq 'length')
+            [ "$N" = "0" ] && break
+            echo "A check is still running; waiting ($i min)"; sleep 60
+          done
       - name: Fetch the sync results from the last 24 hours
         id: latest
         if: steps.gate.outputs.go == 'true'

@@ -1,13 +1,13 @@
 name: Supplier price and stock sync
 
-# 2am and 12pm Sydney every day: each full run covers every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
+# 1am and 12pm Sydney every day: each full run covers every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
 # is read live from its own website, nothing cached, and the results are applied to Shopify. Then an independent
 # recheck of every amended product. The 7am Daily digest email summarises the last two runs.
 on:
   schedule:
     # GitHub schedules in UTC: one entry for daylight time, one for standard time. The first step keeps only 2am Sydney.
-    - cron: "0 15 * * *"   # 2am AEDT
-    - cron: "0 16 * * *"   # 2am AEST
+    - cron: "0 14 * * *"   # 1am AEDT
+    - cron: "0 15 * * *"   # 1am AEST
     - cron: "0 1 * * *"    # 12pm AEDT
     - cron: "0 2 * * *"    # 12pm AEST
   workflow_dispatch:
@@ -30,12 +30,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
-      - name: "2am and 12pm Sydney every day, every supplier"
+      - name: "1am and 12pm Sydney every day, every supplier"
         id: gate
         run: |
           H=$(TZ=Australia/Sydney date +%H)
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$H" != "02" ] && [ "$H" != "12" ]; then
-            echo "Not 2am or 12pm in Sydney (daylight saving switch); skipping this trigger."; echo "go=false" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$H" != "01" ] && [ "$H" != "12" ]; then
+            echo "Not 1am or 12pm in Sydney (daylight saving switch); skipping this trigger."; echo "go=false" >> "$GITHUB_OUTPUT"
           else echo "go=true" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
         if: steps.gate.outputs.go == 'true'
