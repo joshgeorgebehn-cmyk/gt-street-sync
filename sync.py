@@ -40,6 +40,7 @@ STORE = re.sub(r"^https?://", "", os.environ.get("SHOPIFY_STORE", "srbc11-w2.mys
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 PRICE_OFFSET = float(os.environ.get("PRICE_OFFSET", "1"))
 MIN_PRICE = float(os.environ.get("MIN_PRICE", "10"))
+CNC_SET_SKU = os.environ.get("CNC_SET_SKU", "1") == "1"
 MAX_DROP = float(os.environ.get("MAX_DROP", "1"))  # 1 = apply every drop; e.g. 0.30 holds drops over 30% for review
 CNC_DELAY = float(os.environ.get("CNC_DELAY", "0.8"))
 CNC_WORKERS = int(os.environ.get("CNC_WORKERS", "2"))
@@ -221,7 +222,8 @@ def cnc_page(url):
     stock = stock[0].strip() if stock else ""
     offsets = [o.strip().replace(" ", "") for o in attrs.get("offset", "").split(",") if o.strip()]
     offsets = [("+" + o) if re.match(r"^\d", o) else o for o in offsets]
-    return {"ok": price is not None, "price": price, "out": stock.lower() == "out of stock",
+    msku = re.search(r'class="sku">\s*([^<\s][^<]*?)\s*<', t)
+    return {"ok": price is not None, "price": price, "out": stock.lower() == "out of stock", "sku": msku.group(1).strip() if msku else "",
             "backorder": "back-order" in stock.lower() or "backorder" in stock.lower(), "offsets": offsets}
 
 
@@ -240,12 +242,18 @@ def title_key(title, brand=""):
 def clean_sku(x):
     return (x or "").strip().strip("[]").strip()
 
+def sku_norm(x, prefix=""):
+    """Compare part numbers ignoring case, spaces and punctuation, and an optional prefix used only here (e.g. HR-)."""
+    x = (x or "").strip().upper()
+    if prefix and x.startswith(prefix.upper()): x = x[len(prefix):]
+    return re.sub(r"[^A-Z0-9]", "", x)
+
 def shopify_supplier_catalogue(cfg):
     """{SKU: rec} and {title key: rec} where rec = (price, available, sku, handle). Ambiguous titles are dropped."""
     store, brand = cfg["store"].rstrip("/"), cfg.get("brand", "")
     by_sku, by_title, seen, page = {}, {}, {}, 1
     while page < 200:
-        st, txt = http(f"{store}/products.json?limit=250&page={page}")
+        st, txt = http(f"{store}{cfg.get('catalogue_path', '/products.json')}?limit=250&page={page}")
         if st != 200:
             if page == 1: return None, None
             break
@@ -254,7 +262,7 @@ def shopify_supplier_catalogue(cfg):
         for p in ps:
             for v in p["variants"]:
                 rec = (float(v["price"]), bool(v.get("available", True)), clean_sku(v.get("sku")), p["handle"])
-                if rec[2]: by_sku[rec[2].upper()] = rec
+                if rec[2]: by_sku[sku_norm(rec[2])] = rec
             if len(p["variants"]) == 1:
                 k = title_key(p["title"], brand)
                 seen[k] = seen.get(k, 0) + 1
@@ -323,7 +331,7 @@ def main():
     pages, to_read = {}, []
     for u in urls:
         c = cache.get(u)
-        if c and c.get("ok") and c.get("lastmod") and c["lastmod"] == CNC_LASTMOD.get(u) and now - c.get("at", 0) < max_age * 86400:
+        if c and c.get("ok") and "sku" in c and c.get("lastmod") and c["lastmod"] == CNC_LASTMOD.get(u) and now - c.get("at", 0) < max_age * 86400:
             pages[u] = c
         else:
             to_read.append(u)
@@ -353,6 +361,14 @@ def main():
         name = f"{p['title']} {v['opts'].get('Rim Size')} {v['opts'].get('PCD')} {v['opts'].get('Offset')}"
         if pg["offsets"] and v["opts"].get("Offset") not in pg["offsets"]:
             report["missing_offsets"].append(name)
+        # CNC's stock code for this size and PCD. One CNC page covers several offsets, so the offset is appended
+        # to keep every variant's SKU unique (e.g. 1674-P35). Only blank or placeholder (NYC-...) SKUs are replaced.
+        if CNC_SET_SKU and pg.get("sku") and (not v["sku"] or v["sku"].upper().startswith("NYC-")):
+            off = (v["opts"].get("Offset") or "").replace("+", "P").replace("-", "M").replace(" ", "")
+            new_sku = f"{pg['sku']}-{off}" if off else pg["sku"]
+            if new_sku != v["sku"]:
+                sku_set[v["id"]] = new_sku
+                report.setdefault("sku_changes", []).append({"product": name, "from": v["sku"], "to": new_sku})
         decisions.append((p, v, name, pg["price"], pg["out"], PRICE_OFFSET, MIN_PRICE))
 
     # Other suppliers with a public Shopify catalogue (suppliers.json).
@@ -370,7 +386,7 @@ def main():
         offset, floor = float(cfg.get("price_offset", PRICE_OFFSET)), float(cfg.get("min_price", 5))
         for p in prods:
             for v in p["variants"]:
-                hit = by_sku.get(v["sku"].upper()) if v["sku"] else None
+                hit = by_sku.get(sku_norm(v["sku"], cfg.get("sku_prefix", ""))) if v["sku"] else None
                 if not hit and cfg.get("match_title") and len(p["variants"]) == 1:
                     hit = by_title.get(title_key(p["title"], cfg.get("brand", "")))
                 if not hit:
@@ -379,7 +395,8 @@ def main():
                 if cfg.get("set_sku") and hit[2] and v["sku"] != hit[2]:
                     sku_set[v["id"]] = hit[2]
                     report.setdefault("sku_changes", []).append({"product": p["title"], "from": v["sku"], "to": hit[2]})
-                decisions.append((p, v, f"{p['title']} ({name_} {hit[2] or hit[3]})", hit[0], not hit[1], offset, floor))
+                src_out = (not hit[1]) if cfg.get("use_stock", True) else None  # None = price only, stock untouched
+                decisions.append((p, v, f"{p['title']} ({name_} {hit[2] or hit[3]})", hit[0], src_out, offset, floor))
 
     updates = {}  # product id -> list of variant inputs
     to_zero = []  # inventory item ids that become sold out
@@ -392,7 +409,9 @@ def main():
             else:
                 inp["price"] = f"{new_price:.2f}"
                 report["price_changes"].append({"variant": name, "from": v["price"], "to": new_price})
-        if src_out:
+        if src_out is None:
+            pass
+        elif src_out:
             if v["tracked"] is not True or v["policy"] != "DENY":
                 inp["inventoryPolicy"] = "DENY"; inp["inventoryItem"] = {"tracked": True}
                 report["sold_out"].append(name)

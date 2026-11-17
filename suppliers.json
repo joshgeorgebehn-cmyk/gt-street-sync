@@ -39,6 +39,23 @@
     "enabled": true
   },
   {
+    "id": "hr-revzone",
+    "name": "H&R (Revzone price check)",
+    "store": "https://shop.revzone.com.au",
+    "catalogue_path": "/collections/h-r/products.json",
+    "brand": "H&R",
+    "query": "vendor:\"H&R\"",
+    "sku_prefix": "HR-",
+    "match_title": false,
+    "set_sku": false,
+    "use_stock": false,
+    "price_offset": 1,
+    "min_price": 5,
+    "min_catalogue": 200,
+    "enabled": true,
+    "note": "Revzone is an authorised H&R retailer, not GT Street's H&R supplier. Price only: stock is never changed from this source."
+  },
+  {
     "id": "justjap",
     "name": "Just Jap",
     "store": "https://justjap.com",
