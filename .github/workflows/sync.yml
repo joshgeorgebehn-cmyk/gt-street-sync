@@ -28,6 +28,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Restore CNC page cache
+        uses: actions/cache/restore@v4
+        with:
+          path: cnc_cache.json
+          key: cnc-cache-${{ github.run_id }}
+          restore-keys: cnc-cache-
       - name: Run sync
         env:
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
@@ -42,6 +48,12 @@ jobs:
           JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
           ONLY: ${{ inputs.only || '' }}
         run: python3 sync.py
+      - name: Save CNC page cache
+        if: always() && hashFiles('cnc_cache.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: cnc_cache.json
+          key: cnc-cache-${{ github.run_id }}
       - name: Sales channel coverage
         if: always()
         env:

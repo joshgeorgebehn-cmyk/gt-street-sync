@@ -179,13 +179,17 @@ def storefront_products(all_vendors=False):
 
 
 # ---------------------------------------------------------------- CNC
+CNC_LASTMOD = {}  # url -> lastmod from CNC's sitemap, filled by cnc_index()
+
 def cnc_index():
     """All CNC wheel pages for the three brands: {(range, size, pcd): url}."""
     idx = {}
     for i in ["", "2", "3", "4", "5", "6", "7", "8", "9"]:
         st, txt = http(f"https://cncwheels.com.au/product-sitemap{i}.xml")
         if st != 200 or "<urlset" not in txt: continue
-        for loc in re.findall(r"<loc>(https://cncwheels\.com\.au/shop/[^<]+)</loc>", txt):
+        for m in re.finditer(r"<loc>(https://cncwheels\.com\.au/shop/[^<]+)</loc>(?:\s*<lastmod>([^<]+)</lastmod>)?", txt):
+            loc = m.group(1)
+            if m.group(2): CNC_LASTMOD[loc] = m.group(2)
             parts = loc.rstrip("/").split("/")
             slug = parts[-1]
             if parts[-2] == "wheel-tyre-packages" or "package" in slug or not slug.startswith(BRAND_PREFIX): continue
@@ -308,10 +312,32 @@ def main():
 
     urls = sorted({u for _, _, u in plan})
     print(f"{len(products)} products, {len(plan)} variants matched, reading {len(urls)} CNC pages", flush=True)
-    pages = {}
+    # Incremental: reuse yesterday's result for pages CNC hasn't changed since (per its sitemap), but re-read every
+    # page at least every CACHE_MAX_DAYS days in case a stock change doesn't update CNC's last-modified date.
+    cache_path, max_age = os.environ.get("CNC_CACHE", "cnc_cache.json"), float(os.environ.get("CACHE_MAX_DAYS", "3"))
+    try:
+        cache = json.load(open(cache_path))
+    except Exception:
+        cache = {}
+    now = time.time()
+    pages, to_read = {}, []
+    for u in urls:
+        c = cache.get(u)
+        if c and c.get("ok") and c.get("lastmod") and c["lastmod"] == CNC_LASTMOD.get(u) and now - c.get("at", 0) < max_age * 86400:
+            pages[u] = c
+        else:
+            to_read.append(u)
+    report["cnc_pages_from_cache"] = len(urls) - len(to_read)
+    print(f"{len(to_read)} CNC pages changed or due for a recheck; {len(urls) - len(to_read)} unchanged since the last run", flush=True)
     with cf.ThreadPoolExecutor(CNC_WORKERS) as ex:
-        for u, res in zip(urls, ex.map(cnc_page, urls)):
+        for u, res in zip(to_read, ex.map(cnc_page, to_read)):
             pages[u] = res
+            if res.get("ok"):
+                cache[u] = dict(res, lastmod=CNC_LASTMOD.get(u), at=now)
+    try:
+        json.dump(cache, open(cache_path, "w"))
+    except Exception as e:
+        report["errors"].append(f"Could not save the CNC cache: {e}")
     failed = [u for u, r in pages.items() if not r["ok"]]
     report["cnc_pages_read"] = len(urls); report["cnc_pages_failed"] = len(failed)
     # If CNC is down or blocking, change nothing.
@@ -416,7 +442,7 @@ def finish(report, started, to_zero, updates):
     md = [f"# Supplier price and stock sync {'(dry run, nothing changed)' if report['dry_run'] else '(live)'}",
           f"Started {report['started']}",
           f"- GT Street products checked: {report['products']}",
-          f"- CNC pages read: {report.get('cnc_pages_read', 0)} (failed: {report.get('cnc_pages_failed', 0)})",
+          f"- CNC pages checked: {report.get('cnc_pages_read', 0)} (unchanged since last run, reused: {report.get('cnc_pages_from_cache', 0)}; failed: {report.get('cnc_pages_failed', 0)})",
           f"- Price changes: {len(report['price_changes'])}",
           f"- Held for review (big drop or under ${MIN_PRICE:.0f}): {len(report['held'])}",
           f"- Newly sold out: {len(report['sold_out'])}",
