@@ -243,6 +243,13 @@ def jj_catalogue():
 def main():
     started = datetime.datetime.now(datetime.timezone.utc)
     source = os.environ.get("SOURCE", "admin")
+    if source == "admin":
+        granted = {x["handle"] for x in gql("{ currentAppInstallation { accessScopes { handle } } }")["currentAppInstallation"]["accessScopes"]}
+        need = {"write_products", "write_inventory", "read_locations"}
+        if not need <= granted:
+            sys.exit("The Shopify app is missing permissions: " + ", ".join(sorted(need - granted)) +
+                     ". Release an app version with these scopes in the Dev Dashboard, then approve the update on the store. Granted now: " +
+                     (", ".join(sorted(granted)) or "none"))
     products = shopify_products() if source == "admin" else storefront_products()
     if os.environ.get("LIMIT_PRODUCTS"):
         sk = int(os.environ.get("SKIP_PRODUCTS", "0")); products = products[sk:sk + int(os.environ["LIMIT_PRODUCTS"])]
