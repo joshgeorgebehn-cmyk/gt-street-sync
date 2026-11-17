@@ -77,7 +77,13 @@ def http(url, data=None, headers=None, timeout=60, retries=3):
         except urllib.error.HTTPError as e:
             if e.code in (429, 500, 502, 503, 504) and attempt < retries - 1:
                 time.sleep(5 * (attempt + 1)); continue
-            return e.code, ""
+            try:
+                eb = e.read()
+                if e.headers.get("Content-Encoding") == "gzip":
+                    eb = gzip.decompress(eb)
+                return e.code, eb.decode("utf-8", "ignore")
+            except Exception:
+                return e.code, ""
         except Exception:
             if attempt < retries - 1:
                 time.sleep(5 * (attempt + 1)); continue
