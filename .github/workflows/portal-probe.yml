@@ -35,7 +35,7 @@ jobs:
         run: |
           if [ "$PORTAL" = "equipit" ]; then
             python3 -m pip install -q playwright && python3 -m playwright install --with-deps chromium
-            python3 -W ignore equipit_probe.py
+            python3 -W ignore equipit_deep.py
           else
-            python3 -W ignore portal_login.py
+            python3 -W ignore deep_probe.py
           fi
