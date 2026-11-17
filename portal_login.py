@@ -183,6 +183,23 @@ def probe(html):
     }
 
 
+def nav_paths(html, base, limit=8):
+    """Unique in-portal paths from the page's links. Paths only (no link text), for structure probing."""
+    seen, out = set(), []
+    for href in re.findall(r'href="([^"#]+)"', html):
+        if href.startswith(("http", "mailto:", "tel:", "javascript")) and not href.startswith(base):
+            continue
+        path = urllib.parse.urlsplit(urllib.parse.urljoin(base, href)).path
+        if not path or path == "/" or re.search(r"log ?out|sign ?out|login|account|cart|checkout|password|register", path, re.I):
+            continue
+        if path not in seen:
+            seen.add(path)
+            out.append(path)
+        if len(out) >= limit:
+            break
+    return out
+
+
 if __name__ == "__main__":
     import json
     portal = os.environ.get("PORTAL", "nyc")
@@ -194,3 +211,14 @@ if __name__ == "__main__":
     _, landed, body = sign_in(portal, user, password)
     print(f"{portal}: signed in, landed on {urllib.parse.urlsplit(landed).path or '/'}")
     print(json.dumps(probe(body), indent=2))
+    # Follow a few in-portal pages and log their structure, so the stock and price tables can be found.
+    base = PORTALS[portal]["home"]
+    for path in nav_paths(body, base):
+        try:
+            _, page_html = _get(opener, urllib.parse.urljoin(base, path))
+        except Exception as exc:
+            print(f"{portal}: page {path} could not be read ({type(exc).__name__})")
+            continue
+        summary = probe(page_html)
+        print(f"{portal}: page {path}")
+        print(json.dumps({"tables": summary["tables"], "tag_counts": summary["tag_counts"]}, indent=2))
