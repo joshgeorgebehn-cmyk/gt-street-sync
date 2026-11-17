@@ -2,8 +2,10 @@ name: Supplier price and stock sync
 
 on:
   schedule:
-    # 17:15 UTC = 4:15am Sydney (daylight time), after CNC's overnight catalogue refresh
-    - cron: "15 17 * * *"
+    # 2am Sydney all year. GitHub schedules in UTC, so both 15:00 UTC (2am daylight time) and 16:00 UTC
+    # (2am standard time) are listed; the first step skips whichever one isn't 2am in Sydney that day.
+    - cron: "0 15 * * *"
+    - cron: "0 16 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -24,58 +26,68 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
+      - name: Only run at 2am Sydney time
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(TZ=Australia/Sydney date +%H)" != "02" ]; then
+            echo "Not 2am in Sydney (daylight saving switch); skipping this trigger."; echo "go=false" >> "$GITHUB_OUTPUT"
+          else echo "go=true" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == 'true'
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == 'true'
         with:
           python-version: "3.12"
       - name: Restore CNC page cache
+        if: steps.gate.outputs.go == 'true'
         uses: actions/cache/restore@v4
         with:
           path: cnc_cache.json
           key: cnc-cache-${{ github.run_id }}
           restore-keys: cnc-cache-
       - name: Run sync
+        if: steps.gate.outputs.go == 'true'
         env:
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
           SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-          # Scheduled runs change prices and stock only once the repository variable LIVE is set to true.
-          DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && inputs.dry_run) || (github.event_name == 'schedule' && vars.LIVE != 'true')) && '1' || '0' }}
+          # Scheduled runs are live: they apply prices and stock automatically. Manual runs follow the dry_run tick box.
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
-          MIN_PRICE: ${{ vars.MIN_PRICE || '150' }}
-          MAX_DROP: ${{ vars.MAX_DROP || '0.30' }}
+          MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
+          MAX_DROP: ${{ vars.MAX_DROP || '1' }}
           JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
           ONLY: ${{ inputs.only || '' }}
         run: python3 sync.py
       - name: Save CNC page cache
-        if: always() && hashFiles('cnc_cache.json') != ''
+        if: steps.gate.outputs.go == 'true' && (always() && hashFiles('cnc_cache.json') != '')
         uses: actions/cache/save@v4
         with:
           path: cnc_cache.json
           key: cnc-cache-${{ github.run_id }}
       - name: Sales channel coverage
-        if: always()
+        if: steps.gate.outputs.go == 'true' && (always())
         env:
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
           SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-          # Scheduled runs change prices and stock only once the repository variable LIVE is set to true.
-          DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && inputs.dry_run) || (github.event_name == 'schedule' && vars.LIVE != 'true')) && '1' || '0' }}
+          # Scheduled runs are live: they apply prices and stock automatically. Manual runs follow the dry_run tick box.
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
-          MIN_PRICE: ${{ vars.MIN_PRICE || '150' }}
-          MAX_DROP: ${{ vars.MAX_DROP || '0.30' }}
+          MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
+          MAX_DROP: ${{ vars.MAX_DROP || '1' }}
           JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
           ONLY: ${{ inputs.only || '' }}
         run: python3 channels.py
       - name: Summary
-        if: always()
+        if: steps.gate.outputs.go == 'true' && (always())
         run: |
           test -f report.md && cat report.md >> "$GITHUB_STEP_SUMMARY" || echo "No sync report" >> "$GITHUB_STEP_SUMMARY"
           test -f channels.md && cat channels.md >> "$GITHUB_STEP_SUMMARY" || true
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: steps.gate.outputs.go == 'true' && (always())
         with:
           name: sync-report
           path: |

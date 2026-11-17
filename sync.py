@@ -14,8 +14,8 @@ Every run:
   6. Writes a report (report.md, report.json) and stamps the shop metafield gt_sync.last_run.
 
 Safety rules (change with environment variables):
-  * A new price below MIN_PRICE (default 150) or more than MAX_DROP (default 0.30) under the
-    current price is held, not applied, and listed in the report for a person to check.
+  * A new CNC price below MIN_PRICE (default $10, a guard against misread pages) is held and reported.
+    MAX_DROP (default 1 = off) can hold large drops for review, e.g. MAX_DROP=0.30.
   * Anything that cannot be matched to a CNC page is left exactly as it is and reported.
   * Offsets missing from CNC's offset list are reported only.
   * DRY_RUN=1 changes nothing in Shopify.
@@ -39,8 +39,8 @@ API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-10")
 STORE = re.sub(r"^https?://", "", os.environ.get("SHOPIFY_STORE", "srbc11-w2.myshopify.com").strip()).strip("/")
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 PRICE_OFFSET = float(os.environ.get("PRICE_OFFSET", "1"))
-MIN_PRICE = float(os.environ.get("MIN_PRICE", "150"))
-MAX_DROP = float(os.environ.get("MAX_DROP", "0.30"))
+MIN_PRICE = float(os.environ.get("MIN_PRICE", "10"))
+MAX_DROP = float(os.environ.get("MAX_DROP", "1"))  # 1 = apply every drop; e.g. 0.30 holds drops over 30% for review
 CNC_DELAY = float(os.environ.get("CNC_DELAY", "0.8"))
 CNC_WORKERS = int(os.environ.get("CNC_WORKERS", "2"))
 VENDORS = ("GT Form", "JSR", "Black Rock")
@@ -444,7 +444,7 @@ def finish(report, started, to_zero, updates):
           f"- GT Street products checked: {report['products']}",
           f"- CNC pages checked: {report.get('cnc_pages_read', 0)} (unchanged since last run, reused: {report.get('cnc_pages_from_cache', 0)}; failed: {report.get('cnc_pages_failed', 0)})",
           f"- Price changes: {len(report['price_changes'])}",
-          f"- Held for review (big drop or under ${MIN_PRICE:.0f}): {len(report['held'])}",
+          f"- Held for review (under ${MIN_PRICE:.0f} or over the drop limit): {len(report['held'])}",
           f"- Newly sold out: {len(report['sold_out'])}",
           f"- Back in stock: {len(report['back_in_stock'])}",
           f"- Products not on CNC (left alone): {len(report['unmatched_products'])}",
