@@ -29,10 +29,16 @@ Just Jap's price minus `JJ_PRICE_OFFSET` (defaults to `PRICE_OFFSET`, $1) and So
 Floor for these is `JJ_MIN_PRICE` ($5); the 30% overnight drop check still applies. Switch it off with the variable
 `JUST_JAP` = `0`.
 
-## XForce (on by default)
+## Other suppliers (suppliers.json)
 
-Products with vendor `XForce` are matched to xforce.com.au by exact product title (word order ignored) and priced
-at XForce's price minus `XF_PRICE_OFFSET` (default: `PRICE_OFFSET`, $1). Sold out on XForce means Sold out here.
-Titles that don't match exactly are listed in the report and left unchanged. Turn off with repo variable `XFORCE=0`.
+Any supplier whose website runs on Shopify publishes its catalogue at `/products.json`. Each one is a single entry
+in `suppliers.json`:
 
-Just Jap is now off by default. Set repo variable `JUST_JAP=1` to turn it back on.
+- `query`: which GT Street products belong to this supplier (Shopify search syntax, e.g. `vendor:"BC Racing"`)
+- matching is on the exact SKU; `match_title: true` also matches on the exact product title
+- `set_sku: true` replaces placeholder SKUs with the supplier's real part number
+- price = supplier price minus `price_offset`; sold out at the supplier means Sold out here
+- `enabled: false` turns a supplier off
+
+Current: XForce, BC Racing and Alu-Cab on; Just Jap off. To test one supplier quickly, run the workflow with
+`only` set to its id (e.g. `xforce`); CNC is skipped unless `cnc` is listed.

@@ -20,12 +20,11 @@ Safety rules (change with environment variables):
   * Offsets missing from CNC's offset list are reported only.
   * DRY_RUN=1 changes nothing in Shopify.
 
-XForce source: xforce.com.au public catalogue. Products with vendor XForce are matched on the exact title (word
-order ignored), priced at XForce's price minus XF_PRICE_OFFSET and Sold out when XForce is. On by default (XFORCE=1).
-
-Optional source, off by default (JUST_JAP=1 to enable): Just Jap (justjap.com public catalogue). Products tagged supplier:justjap are matched on the exact
-SKU, priced at Just Jap's price minus JJ_PRICE_OFFSET (default: PRICE_OFFSET) and Sold out when Just Jap is.
-Set JUST_JAP=0 to switch it off.
+Other suppliers: every supplier website listed in suppliers.json (Shopify-platform sites with a public
+/products.json catalogue, e.g. XForce, BC Racing, Alu-Cab). GT Street products found by that entry's "query" are
+matched on the exact SKU (and, where "match_title" is true, on the exact title), priced at the supplier's price minus
+"price_offset" and marked Sold out when the supplier is. Turn one off with "enabled": false or a repo variable named
+after its id (e.g. BCRACING=0). ONLY=xforce runs just that supplier (and skips CNC) for a quick test.
 
 Credentials (GitHub Actions secrets, never in code):
   SHOPIFY_STORE          e.g. srbc11-w2.myshopify.com
@@ -222,58 +221,55 @@ def cnc_page(url):
             "backorder": "back-order" in stock.lower() or "backorder" in stock.lower(), "offsets": offsets}
 
 
-# ---------------------------------------------------------------- Just Jap
-JJ_STORE = os.environ.get("JJ_STORE", "https://justjap.com")
-JJ_TAG = os.environ.get("JJ_TAG", "supplier:justjap")
-JJ_PRICE_OFFSET = float(os.environ.get("JJ_PRICE_OFFSET", os.environ.get("PRICE_OFFSET", "1")))
-JJ_MIN_PRICE = float(os.environ.get("JJ_MIN_PRICE", "5"))
+# ---------------------------------------------------------------- Shopify-platform suppliers
+# Many supplier and distributor websites run on Shopify and publish their catalogue at /products.json.
+# Each one is a single entry in suppliers.json, so adding a supplier is a config change, not new code.
+TITLE_STOP = {"system", "exhaust", "with", "and", "the", "for", "inch", "in", "to", "of"}
 
-def jj_catalogue():
-    """Just Jap's public Shopify catalogue: {SKU: (price, available)}. One request per 250 products."""
-    out, page = {}, 1
-    while page < 400:
-        st, txt = http(f"{JJ_STORE}/products.json?limit=250&page={page}")
-        if st != 200: return None if page == 1 else out
+def title_key(title, brand=""):
+    """Order-free word set of a title, ignoring the brand name and filler words."""
+    s = title.lower().replace('"', " inch ").replace("&", " ")
+    s = re.sub(r"(\d)\.(\d)", r"\1p\2", s)
+    stop = TITLE_STOP | set(re.findall(r"[a-z0-9]+", brand.lower()))
+    return frozenset(t for t in re.findall(r"[a-z0-9]+", s) if t not in stop)
+
+def clean_sku(x):
+    return (x or "").strip().strip("[]").strip()
+
+def shopify_supplier_catalogue(cfg):
+    """{SKU: rec} and {title key: rec} where rec = (price, available, sku, handle). Ambiguous titles are dropped."""
+    store, brand = cfg["store"].rstrip("/"), cfg.get("brand", "")
+    by_sku, by_title, seen, page = {}, {}, {}, 1
+    while page < 200:
+        st, txt = http(f"{store}/products.json?limit=250&page={page}")
+        if st != 200:
+            if page == 1: return None, None
+            break
         ps = json.loads(txt).get("products", [])
         if not ps: break
         for p in ps:
             for v in p["variants"]:
-                if v.get("sku"): out[v["sku"].strip().upper()] = (float(v["price"]), bool(v["available"]))
-        page += 1; time.sleep(1.2)
+                rec = (float(v["price"]), bool(v.get("available", True)), clean_sku(v.get("sku")), p["handle"])
+                if rec[2]: by_sku[rec[2].upper()] = rec
+            if len(p["variants"]) == 1:
+                k = title_key(p["title"], brand)
+                seen[k] = seen.get(k, 0) + 1
+                by_title[k] = (float(p["variants"][0]["price"]), bool(p["variants"][0].get("available", True)),
+                               clean_sku(p["variants"][0].get("sku")), p["handle"])
+        page += 1; time.sleep(float(cfg.get("delay", 1.0)))
+    return by_sku, {k: v for k, v in by_title.items() if seen[k] == 1}
+
+def load_suppliers():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "suppliers.json")
+    with open(path) as f:
+        cfg = json.load(f)
+    only = {x.strip().lower() for x in os.environ.get("ONLY", "").split(",") if x.strip()}
+    out = []
+    for c in cfg:
+        on = os.environ.get(c["id"].upper().replace("-", "_"), "1" if c.get("enabled", True) else "0") == "1"
+        if only: on = c["id"].lower() in only
+        if on: out.append(c)
     return out
-
-# ---------------------------------------------------------------- XForce
-XF_STORE = os.environ.get("XF_STORE", "https://www.xforce.com.au")
-XF_VENDOR = os.environ.get("XF_VENDOR", "XForce")
-XF_PRICE_OFFSET = float(os.environ.get("XF_PRICE_OFFSET", os.environ.get("PRICE_OFFSET", "1")))
-XF_MIN_PRICE = float(os.environ.get("XF_MIN_PRICE", "5"))
-XF_SET_SKU = os.environ.get("XF_SET_SKU", "1") == "1"  # replace placeholder SKUs with XForce's real part numbers
-XF_STOP = {"xforce", "system", "exhaust", "with", "and", "the", "for", "inch", "in", "to", "of"}
-
-def xf_key(title):
-    """Order-free word set of a title, so 'VW GOLF R MK7 Varex...' on XForce matches 'XForce VW Golf R MK7 Varex...' here."""
-    s = title.lower().replace('"', " inch ").replace("&", " ")
-    s = re.sub(r"(\d)\.(\d)", r"\1p\2", s)
-    return frozenset(t for t in re.findall(r"[a-z0-9]+", s) if t not in XF_STOP)
-
-def xf_catalogue():
-    """XForce's public Shopify catalogue: {title word set: (price, available, sku, handle)} for single-variant products.
-    Titles that appear more than once on XForce are dropped, so an ambiguous match is never used."""
-    seen, out, by_sku, page = {}, {}, {}, 1
-    while page < 40:
-        st, txt = http(f"{XF_STORE}/products.json?limit=250&page={page}")
-        if st != 200: return (None, None) if page == 1 else ({k: v for k, v in out.items() if seen[k] == 1}, by_sku)
-        ps = json.loads(txt).get("products", [])
-        if not ps: break
-        for p in ps:
-            if len(p["variants"]) != 1: continue
-            k, v = xf_key(p["title"]), p["variants"][0]
-            seen[k] = seen.get(k, 0) + 1
-            rec = (float(v["price"]), bool(v.get("available", True)), (v.get("sku") or "").strip().strip("[]").strip(), p["handle"])
-            out[k] = rec
-            if rec[2]: by_sku[rec[2].upper()] = rec
-        page += 1; time.sleep(1.2)
-    return {k: v for k, v in out.items() if seen[k] == 1}, by_sku
 
 # ---------------------------------------------------------------- main
 def main():
@@ -289,7 +285,9 @@ def main():
     products = shopify_products() if source == "admin" else storefront_products()
     if os.environ.get("LIMIT_PRODUCTS"):
         sk = int(os.environ.get("SKIP_PRODUCTS", "0")); products = products[sk:sk + int(os.environ["LIMIT_PRODUCTS"])]
-    idx = cnc_index()
+    run_cnc = os.environ.get("CNC", "1") == "1" and (not os.environ.get("ONLY") or "cnc" in os.environ["ONLY"].lower())
+    if not run_cnc: products = []
+    idx = cnc_index() if run_cnc else {}
     ranges = {k[0] for k in idx}
     report = {"started": started.isoformat(), "dry_run": DRY_RUN, "products": len(products), "cnc_pages_known": len(idx),
               "unmatched_products": [], "unmatched_variants": [], "missing_offsets": [], "held": [],
@@ -331,39 +329,31 @@ def main():
             report["missing_offsets"].append(name)
         decisions.append((p, v, name, pg["price"], pg["out"], PRICE_OFFSET, MIN_PRICE))
 
-    # Just Jap: products tagged supplier:justjap, matched on the exact SKU.
-    if os.environ.get("JUST_JAP", "0") == "1":
-        jj = jj_catalogue()
-        if jj is None or len(jj) < 1000:
-            report["errors"].append("Just Jap catalogue could not be read; Just Jap products left unchanged.")
-        else:
-            jjp = shopify_products(f'tag:"{JJ_TAG}"') if source == "admin" else [x for x in storefront_products(all_vendors=True) if JJ_TAG in x.get("tags", [])]
-            report["jj_products"] = len(jjp); report["jj_unmatched"] = []
-            for p in jjp:
-                for v in p["variants"]:
-                    hit = jj.get(v.get("sku", "").upper())
-                    if not hit:
-                        report["jj_unmatched"].append(f"{p['title']} ({v.get('sku') or 'no SKU'})"); continue
-                    decisions.append((p, v, f"{p['title']} ({v['sku']})", hit[0], not hit[1], JJ_PRICE_OFFSET, JJ_MIN_PRICE))
-
-    # XForce: products with vendor XForce, matched on the exact product title (word order ignored).
-    if os.environ.get("XFORCE", "1") == "1":
-        xf, xf_sku = xf_catalogue()
-        if xf is None or len(xf) < 300:
-            report["errors"].append("XForce catalogue could not be read; XForce products left unchanged.")
-        else:
-            xfp = shopify_products(f'vendor:"{XF_VENDOR}"') if source == "admin" else [x for x in storefront_products(all_vendors=True) if x.get("vendor", "").lower() == XF_VENDOR.lower()]
-            report["xf_products"] = len(xfp); report["xf_unmatched"] = []
-            for p in xfp:
-                v = p["variants"][0] if len(p["variants"]) == 1 else None
-                # Real XForce part number first, then the exact title.
-                hit = (xf_sku.get(v["sku"].upper()) if v and v["sku"] else None) or (xf.get(xf_key(p["title"])) if v else None)
+    # Other suppliers with a public Shopify catalogue (suppliers.json).
+    report["suppliers"] = {}
+    for cfg in load_suppliers():
+        name_ = cfg["name"]
+        by_sku, by_title = shopify_supplier_catalogue(cfg)
+        rep = {"products": 0, "variants_matched": 0, "unmatched": [], "error": None}
+        report["suppliers"][name_] = rep
+        if by_sku is None or len(by_sku) < int(cfg.get("min_catalogue", 50)):
+            rep["error"] = f"{name_} catalogue could not be read; {name_} products left unchanged."
+            report["errors"].append(rep["error"]); continue
+        prods = shopify_products(cfg["query"]) if source == "admin" else []
+        rep["products"] = len(prods)
+        offset, floor = float(cfg.get("price_offset", PRICE_OFFSET)), float(cfg.get("min_price", 5))
+        for p in prods:
+            for v in p["variants"]:
+                hit = by_sku.get(v["sku"].upper()) if v["sku"] else None
+                if not hit and cfg.get("match_title") and len(p["variants"]) == 1:
+                    hit = by_title.get(title_key(p["title"], cfg.get("brand", "")))
                 if not hit:
-                    report["xf_unmatched"].append(p["title"]); continue
-                if XF_SET_SKU and hit[2] and v["sku"] != hit[2]:
+                    rep["unmatched"].append(f"{p['title']} ({v['sku'] or 'no SKU'})"); continue
+                rep["variants_matched"] += 1
+                if cfg.get("set_sku") and hit[2] and v["sku"] != hit[2]:
                     sku_set[v["id"]] = hit[2]
                     report.setdefault("sku_changes", []).append({"product": p["title"], "from": v["sku"], "to": hit[2]})
-                decisions.append((p, v, f"{p['title']} (XForce {hit[2] or hit[3]})", hit[0], not hit[1], XF_PRICE_OFFSET, XF_MIN_PRICE))
+                decisions.append((p, v, f"{p['title']} ({name_} {hit[2] or hit[3]})", hit[0], not hit[1], offset, floor))
 
     updates = {}  # product id -> list of variant inputs
     to_zero = []  # inventory item ids that become sold out
@@ -423,7 +413,7 @@ def finish(report, started, to_zero, updates):
                             "value": started.replace(microsecond=0).isoformat()}]})
     report["finished"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     json.dump(report, open("report.json", "w"), indent=1)
-    md = [f"# CNC sync {'(dry run, nothing changed)' if report['dry_run'] else ''}",
+    md = [f"# Supplier price and stock sync {'(dry run, nothing changed)' if report['dry_run'] else '(live)'}",
           f"Started {report['started']}",
           f"- GT Street products checked: {report['products']}",
           f"- CNC pages read: {report.get('cnc_pages_read', 0)} (failed: {report.get('cnc_pages_failed', 0)})",
@@ -434,20 +424,21 @@ def finish(report, started, to_zero, updates):
           f"- Products not on CNC (left alone): {len(report['unmatched_products'])}",
           f"- Variants with no CNC page for that size and PCD (left alone): {len(report['unmatched_variants'])}",
           f"- Offsets CNC does not list (reported only): {len(report['missing_offsets'])}",
-          f"- Just Jap products checked: {report.get('jj_products', 0)} (SKUs not on Just Jap: {len(report.get('jj_unmatched', []))})",
-          f"- Part numbers replaced with XForce's: {len(report.get('sku_changes', []))}",
-          f"- XForce products checked: {report.get('xf_products', 0)} (not matched to xforce.com.au: {len(report.get('xf_unmatched', []))})",
+          f"- Part numbers replaced with the supplier's real part number: {len(report.get('sku_changes', []))}",
+          *[f"- {n}: {r['products']} products, {r['variants_matched']} variants matched, {len(r['unmatched'])} not found on their site" + (f" (ERROR: {r['error']})" if r['error'] else "")
+            for n, r in report.get("suppliers", {}).items()],
           f"- Errors: {len(report['errors'])}", ""]
     if report["held"]:
         md.append("## Held for review"); md += [f"- {h['variant']}: now ${h['current']:.2f}, CNC ${h['cnc']:.2f}" for h in report["held"][:200]]
     if report["errors"]:
         md.append("## Errors"); md += [f"- {json.dumps(e)[:300]}" for e in report["errors"][:50]]
-    if report.get("xf_unmatched"):
-        md.append("## XForce products not matched to xforce.com.au (left unchanged)"); md += [f"- {t}" for t in report["xf_unmatched"]]
+    for n, r in report.get("suppliers", {}).items():
+        if r["unmatched"]:
+            md.append(f"## {n}: not found on their site (left unchanged)"); md += [f"- {t}" for t in r["unmatched"][:300]]
     if report["unmatched_products"]:
         md.append("## Products not on CNC"); md += [f"- {t}" for t in report["unmatched_products"]]
     open("report.md", "w").write("\n".join(md) + "\n")
-    print("\n".join(md[:14]))
+    print("\n".join(md[:20]))
 
 if __name__ == "__main__":
     main()

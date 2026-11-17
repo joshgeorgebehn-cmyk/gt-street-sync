@@ -1,4 +1,4 @@
-name: CNC price and stock sync
+name: Supplier price and stock sync
 
 on:
   schedule:
@@ -10,6 +10,10 @@ on:
         description: "Dry run: report only, change nothing"
         type: boolean
         default: true
+      only:
+        description: "Run only these suppliers, comma separated (e.g. xforce or cnc,bcracing). Blank runs everything."
+        type: string
+        default: ""
 
 concurrency:
   group: cnc-sync
@@ -36,8 +40,7 @@ jobs:
           MIN_PRICE: ${{ vars.MIN_PRICE || '150' }}
           MAX_DROP: ${{ vars.MAX_DROP || '0.30' }}
           JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
-          JUST_JAP: ${{ vars.JUST_JAP || '0' }}
-          XFORCE: ${{ vars.XFORCE || '1' }}
+          ONLY: ${{ inputs.only || '' }}
         run: python3 sync.py
       - name: Sales channel coverage
         if: always()
@@ -52,8 +55,7 @@ jobs:
           MIN_PRICE: ${{ vars.MIN_PRICE || '150' }}
           MAX_DROP: ${{ vars.MAX_DROP || '0.30' }}
           JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
-          JUST_JAP: ${{ vars.JUST_JAP || '0' }}
-          XFORCE: ${{ vars.XFORCE || '1' }}
+          ONLY: ${{ inputs.only || '' }}
         run: python3 channels.py
       - name: Summary
         if: always()

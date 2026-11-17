@@ -1,0 +1,54 @@
+[
+  {
+    "id": "xforce",
+    "name": "XForce",
+    "store": "https://www.xforce.com.au",
+    "brand": "XForce",
+    "query": "vendor:\"XForce\"",
+    "match_title": true,
+    "set_sku": true,
+    "price_offset": 1,
+    "min_price": 5,
+    "min_catalogue": 300,
+    "enabled": true
+  },
+  {
+    "id": "bcracing",
+    "name": "BC Racing",
+    "store": "https://bcracing.com.au",
+    "brand": "BC Racing",
+    "query": "vendor:\"BC Racing\"",
+    "match_title": false,
+    "set_sku": false,
+    "price_offset": 1,
+    "min_price": 5,
+    "min_catalogue": 2000,
+    "enabled": true
+  },
+  {
+    "id": "alucab",
+    "name": "Alu-Cab",
+    "store": "https://alu-cab.com.au",
+    "brand": "Alu-Cab",
+    "query": "vendor:\"Alu-Cab\"",
+    "match_title": false,
+    "set_sku": false,
+    "price_offset": 1,
+    "min_price": 5,
+    "min_catalogue": 100,
+    "enabled": true
+  },
+  {
+    "id": "justjap",
+    "name": "Just Jap",
+    "store": "https://justjap.com",
+    "brand": "",
+    "query": "tag:\"supplier:justjap\"",
+    "match_title": false,
+    "set_sku": false,
+    "price_offset": 1,
+    "min_price": 5,
+    "min_catalogue": 1000,
+    "enabled": false
+  }
+]
