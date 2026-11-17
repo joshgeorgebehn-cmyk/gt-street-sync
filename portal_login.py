@@ -110,6 +110,14 @@ def sign_in(portal, user, password):
     errors = len(re.findall(r'validation-summary|alert-danger|field-validation-error|error-message', body, re.I))
     path = urllib.parse.urlsplit(landed).path or "/"
     if form_still_shown:
+        # Some portals answer the post with the sign-in form still in the page. Check the home page
+        # for a sign-out link before deciding the sign-in failed.
+        try:
+            _, home_html = _get(opener, cfg["home"])
+            if re.search(r"log ?out|sign ?out", home_html, re.I):
+                return opener, cfg["home"], home_html
+        except Exception:
+            pass
         cookies = sorted({c.name for c in jar_of(opener)})
         raise RuntimeError(
             f"{portal}: still on the sign-in form after posting (landed on {path}, error blocks: {errors}, "
@@ -179,8 +187,8 @@ if __name__ == "__main__":
     import json
     portal = os.environ.get("PORTAL", "nyc")
     cfg = PORTALS[portal]
-    user = os.environ.get(cfg["user_env"], "")
-    password = os.environ.get(cfg["pass_env"], "")
+    user = os.environ.get(cfg["user_env"], "").strip()
+    password = os.environ.get(cfg["pass_env"], "").strip()
     if not user or not password:
         raise SystemExit(f"{portal}: secrets {cfg['user_env']} / {cfg['pass_env']} are not set")
     _, landed, body = sign_in(portal, user, password)
