@@ -1,8 +1,8 @@
-"""Daily email to sales@gtstreet.au after every run: price changes, stock changes, held items, errors and the
+"""Daily email to joshua.b@gtstreet.au and will.k@gtstreet.au after every run: price changes, stock changes, held items, errors and the
 independent verification result, with a small photo of each product.
 
 Sending, in order of preference:
-  1. Microsoft 365 (Graph API), secrets MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_SENDER (default sales@gtstreet.au)
+  1. Microsoft 365 (Graph API), secrets MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_SENDER (default joshua.b@gtstreet.au)
   2. Any SMTP server, secrets SMTP_HOST, SMTP_PORT (default 587), SMTP_USER, SMTP_PASS
 A GitHub issue is also opened as a backup (GitHub emails the repo owner). price_changes.csv is attached to the run.
 """
@@ -10,7 +10,7 @@ import csv, datetime, html, json, os, re, smtplib, subprocess, urllib.parse, url
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-TO = os.environ.get("EMAIL_TO") or "sales@gtstreet.au"
+TO = os.environ.get("EMAIL_TO") or "joshua.b@gtstreet.au,will.k@gtstreet.au"
 SITE = "https://gtstreet.au/products/"
 
 def read(p):
@@ -109,7 +109,7 @@ try:
             f"https://login.microsoftonline.com/{os.environ['MS_TENANT_ID']}/oauth2/v2.0/token",
             data=urllib.parse.urlencode({"client_id": os.environ["MS_CLIENT_ID"], "client_secret": os.environ["MS_CLIENT_SECRET"],
                                          "scope": "https://graph.microsoft.com/.default", "grant_type": "client_credentials"}).encode()), timeout=30).read())["access_token"]
-        sender = os.environ.get("MS_SENDER") or TO
+        sender = os.environ.get("MS_SENDER") or "joshua.b@gtstreet.au"
         msg = {"message": {"subject": subject, "body": {"contentType": "HTML", "content": body},
                            "toRecipients": [{"emailAddress": {"address": a.strip()}} for a in TO.split(",")]}, "saveToSentItems": False}
         urllib.request.urlopen(urllib.request.Request(f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail", data=json.dumps(msg).encode(),
@@ -133,7 +133,7 @@ if os.environ.get("TEST_EMAIL"):
     raise SystemExit(0 if sent else "Test email was NOT sent; see the error above.")
 # Backup: GitHub issue (GitHub emails and notifies the repo owner).
 if os.environ.get("GH_TOKEN"):
-    note = "" if sent else "\n\n**The email to sales@gtstreet.au was NOT sent. Check the email secrets.**"
+    note = "" if sent else "\n\n**The email was NOT sent. Check the email secrets.**"
     md = re.sub(r"<br>", " ", body); md = re.sub(r"<[^>]+>", " ", md); md = re.sub(r"[ \t]+", " ", md)
     issue = f"@{owner} {html.unescape(md)[:60000]}{note}\n\n{run_url}"
     label = "sync-report" if (ok and sent) else "sync-attention"

@@ -2,7 +2,7 @@ name: Supplier price and stock sync
 
 # 2am Sydney every day: the full run covers every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
 # is read live from its own website, nothing cached, and the results are applied to Shopify. Then an independent
-# re-check, and an email to sales@gtstreet.au with every price and stock change.
+# re-check, and an email to Joshua and Will with every price and stock change.
 on:
   schedule:
     # GitHub schedules in UTC: one entry for daylight time, one for standard time. The first step keeps only 2am Sydney.
@@ -93,18 +93,18 @@ jobs:
           MAX_DROP: ${{ vars.MAX_DROP || '0.20' }}
           ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
         run: python3 verify.py
-      - name: Email sales@gtstreet.au
+      - name: Email Joshua and Will
         if: steps.gate.outputs.go == 'true' && always()
         env:
           GH_TOKEN: ${{ github.token }}
           REPO_OWNER: ${{ github.repository_owner }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           JOB_STATUS: ${{ job.status }}
-          EMAIL_TO: ${{ vars.EMAIL_TO || 'sales@gtstreet.au' }}
+          EMAIL_TO: ${{ vars.EMAIL_TO || 'joshua.b@gtstreet.au,will.k@gtstreet.au' }}
           MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
           MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
           MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
-          MS_SENDER: ${{ vars.MS_SENDER || 'sales@gtstreet.au' }}
+          MS_SENDER: ${{ vars.MS_SENDER || 'joshua.b@gtstreet.au' }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}

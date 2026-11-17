@@ -1,6 +1,6 @@
 name: Send test email
 
-# Sends one sample daily email to sales@gtstreet.au to confirm the Microsoft 365 secrets work. Changes nothing.
+# Sends one sample daily email to Joshua and Will to confirm the Microsoft 365 secrets work. Changes nothing.
 on:
   workflow_dispatch:
 
@@ -29,10 +29,10 @@ jobs:
         env:
           TEST_EMAIL: "1"
           JOB_STATUS: success
-          EMAIL_TO: ${{ vars.EMAIL_TO || 'sales@gtstreet.au' }}
+          EMAIL_TO: ${{ vars.EMAIL_TO || 'joshua.b@gtstreet.au,will.k@gtstreet.au' }}
           MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
           MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
           MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
-          MS_SENDER: ${{ vars.MS_SENDER || 'sales@gtstreet.au' }}
+          MS_SENDER: ${{ vars.MS_SENDER || 'joshua.b@gtstreet.au' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 notify.py
