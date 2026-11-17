@@ -89,11 +89,43 @@ jobs:
           JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
           ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
         run: python3 channels.py
+      - name: Description upkeep
+        if: steps.gate.outputs.go == 'true' && (always())
+        env:
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+          # Scheduled runs are live: they apply prices and stock automatically. Manual runs follow the dry_run tick box.
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
+          PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
+          MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
+          MAX_DROP: ${{ vars.MAX_DROP || '0.20' }}
+          JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
+          ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
+        run: python3 maintenance.py
+      - name: Independent verification against suppliers
+        if: steps.gate.outputs.go == 'true' && (success() || failure())
+        env:
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+          # Scheduled runs are live: they apply prices and stock automatically. Manual runs follow the dry_run tick box.
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
+          PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
+          MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
+          MAX_DROP: ${{ vars.MAX_DROP || '0.20' }}
+          JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
+          ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
+        run: python3 verify.py
       - name: Summary
         if: steps.gate.outputs.go == 'true' && (always())
         run: |
           test -f report.md && cat report.md >> "$GITHUB_STEP_SUMMARY" || echo "No sync report" >> "$GITHUB_STEP_SUMMARY"
           test -f channels.md && cat channels.md >> "$GITHUB_STEP_SUMMARY" || true
+          test -f maintenance.md && cat maintenance.md >> "$GITHUB_STEP_SUMMARY" || true
+          test -f verify.md && cat verify.md >> "$GITHUB_STEP_SUMMARY" || true
       - uses: actions/upload-artifact@v4
         if: steps.gate.outputs.go == 'true' && (always())
         with:
@@ -102,4 +134,6 @@ jobs:
             report.md
             report.json
             channels.md
+            maintenance.md
+            verify.md
           retention-days: 30

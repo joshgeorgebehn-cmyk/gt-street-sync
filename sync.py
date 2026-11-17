@@ -15,7 +15,7 @@ Every run:
 
 Safety rules (change with environment variables):
   * A new CNC price below MIN_PRICE (default $10, a guard against misread pages) is held and reported.
-    MAX_DROP (default 1 = off) can hold large drops for review, e.g. MAX_DROP=0.30.
+    MAX_DROP (default 0.20) holds any drop of more than 20% overnight for a person to check.
   * Anything that cannot be matched to a CNC page is left exactly as it is and reported.
   * Offsets missing from CNC's offset list are reported only.
   * DRY_RUN=1 changes nothing in Shopify.
@@ -213,7 +213,7 @@ def cnc_index():
             idx[(norm(" ".join(toks[:k])), f"{d}x{w}", pcd)] = loc
     return idx
 
-CNC_PARSER_VERSION = 2
+CNC_PARSER_VERSION = 3
 
 def _money(x):
     try:
@@ -263,11 +263,18 @@ def cnc_page(url):
             attrs[re.sub("<[^>]+>", "", a).strip().lower()] = html.unescape(re.sub("<[^>]+>", "", b)).strip()
     stock = re.findall(r'class="stock[^"]*">([^<]*)', t)
     stock = stock[0].strip() if stock else ""
+    # Stock is read twice as well: the stock line shown on the page and WooCommerce's structured availability.
+    avail = re.search(r'"availability":"https:\\?/\\?/schema\.org\\?/(\w+)"', t)
+    avail = avail.group(1) if avail else ""
+    shown_out = stock.lower() == "out of stock"
+    struct_out = avail == "OutOfStock" if avail else None
+    if price is not None and struct_out is not None and shown_out != struct_out:
+        price, why = None, f"stock readings disagree (page says '{stock or 'in stock'}', structured data says {avail})"
     offsets = [o.strip().replace(" ", "") for o in attrs.get("offset", "").split(",") if o.strip()]
     offsets = [("+" + o) if re.match(r"^\d", o) else o for o in offsets]
     msku = re.search(r'class="sku">\s*([^<\s][^<]*?)\s*<', t)
     return {"ok": price is not None, "price": price, "why": why, "v": CNC_PARSER_VERSION,
-            "out": stock.lower() == "out of stock", "sku": msku.group(1).strip() if msku else "",
+            "out": shown_out, "sku": msku.group(1).strip() if msku else "",
             "backorder": "back-order" in stock.lower() or "backorder" in stock.lower(), "offsets": offsets}
 
 
@@ -414,6 +421,7 @@ def main():
                 sku_set[v["id"]] = new_sku
                 report.setdefault("sku_changes", []).append({"product": name, "from": v["sku"], "to": new_sku})
         decisions.append((p, v, name, pg["price"], pg["out"], PRICE_OFFSET, MIN_PRICE))
+        report.setdefault("cnc_applied", []).append({"variant": v["id"], "url": url, "name": name})
 
     # Other suppliers with a public Shopify catalogue (suppliers.json).
     report["suppliers"] = {}
@@ -441,6 +449,8 @@ def main():
                     report.setdefault("sku_changes", []).append({"product": p["title"], "from": v["sku"], "to": hit[2]})
                 src_out = (not hit[1]) if cfg.get("use_stock", True) else None  # None = price only, stock untouched
                 decisions.append((p, v, f"{p['title']} ({name_} {hit[2] or hit[3]})", hit[0], src_out, offset, floor))
+                report.setdefault("supplier_applied", []).append({"variant": v["id"], "store": cfg["store"].rstrip("/"),
+                    "handle": hit[3], "sku": hit[2], "offset": offset, "stock": src_out is not None, "name": p["title"]})
 
     updates = {}  # product id -> list of variant inputs
     stock_targets = {}  # inventory item id -> available quantity to hold at the store location
@@ -449,7 +459,7 @@ def main():
         new_price = round(src_price - offset, 2)
         if abs(new_price - v["price"]) >= 0.01:
             if new_price < floor or (v["price"] > 0 and new_price < v["price"] * (1 - MAX_DROP)):
-                report["held"].append({"variant": name, "current": v["price"], "cnc": src_price})
+                report["held"].append({"variant": name, "id": v["id"], "current": v["price"], "cnc": src_price})
             else:
                 inp["price"] = f"{new_price:.2f}"
                 report["price_changes"].append({"variant": name, "from": v["price"], "to": new_price})
