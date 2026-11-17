@@ -19,6 +19,10 @@ on:
         type: string
         default: ""
 
+permissions:
+  contents: read
+  issues: write
+
 concurrency:
   group: cnc-sync
   cancel-in-progress: false
@@ -119,6 +123,15 @@ jobs:
           JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
           ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
         run: python3 verify.py
+      - name: Daily change digest (email and notification)
+        if: steps.gate.outputs.go == 'true' && (always())
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          JOB_STATUS: ${{ job.status }}
+          DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
+        run: python3 notify.py
       - name: Summary
         if: steps.gate.outputs.go == 'true' && (always())
         run: |
@@ -136,4 +149,5 @@ jobs:
             channels.md
             maintenance.md
             verify.md
+            price_changes.csv
           retention-days: 30

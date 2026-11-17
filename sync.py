@@ -213,7 +213,7 @@ def cnc_index():
             idx[(norm(" ".join(toks[:k])), f"{d}x{w}", pcd)] = loc
     return idx
 
-CNC_PARSER_VERSION = 3
+CNC_PARSER_VERSION = 4
 
 def _money(x):
     try:
@@ -246,16 +246,21 @@ def cnc_price(t):
     struct = None
     m = re.search(r'"@type":"PriceSpecification","price":"([\d.]+)"', t)
     if m: struct = _money(m.group(1))
-    if shown is None and struct is None: return None, "no price found"
-    if shown is None or struct is None: return None, f"only one price reading (shown {shown}, structured {struct})"
-    if abs(shown - struct) > 0.5: return None, f"price readings disagree (shown {shown}, structured {struct})"
-    return shown, ""
+    if shown is None and struct is None: return None, "no price found", ""
+    if shown is None or struct is None: return None, f"only one price reading (shown {shown}, structured {struct})", ""
+    if abs(shown - struct) > 0.5:
+        # Readings differ. If the price customers see is the higher one, use it (it is what CNC really sells at, so
+        # we stay within market and do not undercut). If the structured figure is the higher one, we would be pricing
+        # above what CNC shows, so the variant is left unchanged and reported.
+        if shown > struct: return shown, "", f"readings differed (shown {shown}, structured {struct}); used the higher, shown price"
+        return None, f"price readings disagree (shown {shown}, structured {struct}, shown is lower)", ""
+    return shown, "", ""
 
 def cnc_page(url):
     st, t = http(url)
     time.sleep(CNC_DELAY)
     if st != 200 or not t: return {"ok": False, "status": st}
-    price, why = cnc_price(t)
+    price, why, note = cnc_price(t)
     attrs = {}
     tab = re.search(r"woocommerce-product-attributes(.*?)</table>", t, re.S)
     if tab:
@@ -269,11 +274,11 @@ def cnc_page(url):
     shown_out = stock.lower() == "out of stock"
     struct_out = avail == "OutOfStock" if avail else None
     if price is not None and struct_out is not None and shown_out != struct_out:
-        price, why = None, f"stock readings disagree (page says '{stock or 'in stock'}', structured data says {avail})"
+        price, why, note = None, f"stock readings disagree (page says '{stock or 'in stock'}', structured data says {avail})"
     offsets = [o.strip().replace(" ", "") for o in attrs.get("offset", "").split(",") if o.strip()]
     offsets = [("+" + o) if re.match(r"^\d", o) else o for o in offsets]
     msku = re.search(r'class="sku">\s*([^<\s][^<]*?)\s*<', t)
-    return {"ok": price is not None, "price": price, "why": why, "v": CNC_PARSER_VERSION,
+    return {"ok": price is not None, "price": price, "why": why, "note": note, "v": CNC_PARSER_VERSION,
             "out": shown_out, "sku": msku.group(1).strip() if msku else "",
             "backorder": "back-order" in stock.lower() or "backorder" in stock.lower(), "offsets": offsets}
 
@@ -399,6 +404,8 @@ def main():
         report["errors"].append(f"Could not save the CNC cache: {e}")
     failed = [u for u, r in pages.items() if not r["ok"]]
     report["cnc_pages_read"] = len(urls); report["cnc_pages_failed"] = len(failed)
+    report["cnc_skipped_pages"] = [{"url": u, "why": pages[u].get("why") or f"HTTP {pages[u].get('status')}"} for u in failed][:300]
+    report["cnc_reading_notes"] = [{"url": u, "note": r["note"]} for u, r in pages.items() if r.get("note")][:300]
     # If CNC is down or blocking, change nothing.
     if urls and len(failed) / len(urls) > 0.2:
         report["errors"].append(f"{len(failed)} of {len(urls)} CNC pages could not be read; CNC products left unchanged.")
@@ -557,6 +564,10 @@ def finish(report, started, stock_targets, updates):
           f"- Errors: {len(report['errors'])}", ""]
     if report["held"]:
         md.append("## Held for review"); md += [f"- {h['variant']}: now ${h['current']:.2f}, CNC ${h['cnc']:.2f}" for h in report["held"][:200]]
+    if report.get("cnc_skipped_pages"):
+        md.append("## CNC pages skipped (left unchanged)"); md += [f"- {x['url']}: {x['why']}" for x in report["cnc_skipped_pages"][:100]]
+    if report.get("cnc_reading_notes"):
+        md.append("## CNC pages where the two price readings differed (higher shown price used)"); md += [f"- {x['url']}: {x['note']}" for x in report["cnc_reading_notes"][:100]]
     if report["errors"]:
         md.append("## Errors"); md += [f"- {json.dumps(e)[:300]}" for e in report["errors"][:50]]
     for n, r in report.get("suppliers", {}).items():
