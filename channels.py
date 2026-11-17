@@ -13,7 +13,7 @@ Needs the app scopes read_publications and write_publications.
 Optional: SKIP_CHANNELS, a comma separated list of words matched against the
 channel catalogue title (for example "Point of Sale") to leave alone.
 """
-import os, sys, json
+import os, sys, json, time
 from sync import gql, DRY_RUN
 
 SKIP = [s.strip().lower() for s in os.environ.get("SKIP_CHANNELS", "").split(",") if s.strip()]
@@ -56,12 +56,20 @@ def main():
         lines.append(f"- {name}: {len(ids)} active products missing" + ("" if DRY_RUN or not ids else ", adding"))
         if DRY_RUN:
             continue
-        for k in range(0, len(ids), 100):
-            r = gql("""mutation($id: ID!, $add: [ID!]) { publicationUpdate(id: $id, input: { publishablesToAdd: $add }) {
-                       userErrors { field message } } }""", {"id": p["id"], "add": ids[k:k + 100]})
-            errs = r["publicationUpdate"]["userErrors"]
-            if errs:
-                errors.append({"channel": name, "errors": errs})
+        # Shopify processes publication changes in the background and refuses new ones while too many are queued
+        # ("limit for simultaneous publication updates"), so send small batches and wait and retry when refused.
+        for k in range(0, len(ids), 50):
+            for attempt in range(8):
+                r = gql("""mutation($id: ID!, $add: [ID!]) { publicationUpdate(id: $id, input: { publishablesToAdd: $add }) {
+                           userErrors { field message } } }""", {"id": p["id"], "add": ids[k:k + 50]})
+                errs = r["publicationUpdate"]["userErrors"]
+                if errs and any("simultaneous" in e["message"] for e in errs):
+                    time.sleep(15 * (attempt + 1)); continue
+                if errs: errors.append({"channel": name, "errors": errs})
+                break
+            else:
+                errors.append({"channel": name, "errors": [{"message": "still busy after retries; will finish on the next run"}]})
+            time.sleep(2)
     if errors:
         lines += ["", "## Errors"] + [f"- {json.dumps(e)[:300]}" for e in errors[:30]]
     out = "\n".join(lines) + "\n"

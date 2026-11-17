@@ -446,10 +446,9 @@ def finish(report, started, to_zero, updates):
         if to_zero:
             loc = gql(LOC_Q)["locations"]["nodes"][0]["id"]
             for i in range(0, len(to_zero), 100):
-                q = [{"inventoryItemId": it, "locationId": loc, "quantity": 0} for it in to_zero[i:i + 100]]
+                q = [{"inventoryItemId": it, "locationId": loc, "quantity": 0, "changeFromQuantity": None} for it in to_zero[i:i + 100]]
                 try:
-                    errs = gql(QTY_M, {"input": {"name": "available", "reason": "correction", "ignoreCompareQuantity": True,
-                                                  "quantities": q}})["inventorySetQuantities"]["userErrors"]
+                    errs = gql(QTY_M, {"input": {"name": "available", "reason": "correction", "quantities": q}})["inventorySetQuantities"]["userErrors"]
                     if errs: report["errors"].append({"inventory": errs[:5]})
                 except Exception as e:
                     report["errors"].append({"inventory": str(e)})
