@@ -1,0 +1,33 @@
+name: Portal sign-in probe (structure only)
+
+# Manual only. Signs in to one dealer portal and logs the page structure, never page content or values.
+# No artifacts are uploaded, because artifacts from a public repository can be downloaded by anyone.
+on:
+  workflow_dispatch:
+    inputs:
+      portal:
+        description: "Portal to probe"
+        type: choice
+        options: [nyc, cooldrive]
+        default: nyc
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Sign in and log structure
+        env:
+          PORTAL: ${{ inputs.portal }}
+          NYC_USER: ${{ secrets.NYC_USER }}
+          NYC_PASS: ${{ secrets.NYC_PASS }}
+          COOLDRIVE_USER: ${{ secrets.COOLDRIVE_USER }}
+          COOLDRIVE_PASS: ${{ secrets.COOLDRIVE_PASS }}
+        run: python3 -W ignore portal_login.py
