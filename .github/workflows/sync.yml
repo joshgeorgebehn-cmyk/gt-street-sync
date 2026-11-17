@@ -1,6 +1,6 @@
 name: Supplier price and stock sync
 
-# 2am Sydney, Monday to Friday: CNC Wheels every weekday; Monday, Wednesday and Friday the full run covers every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
+# 2am Sydney every day: the full run covers every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
 # is read live from its own website, nothing cached, and the results are applied to Shopify. Then an independent
 # re-check, and an email to sales@gtstreet.au with every price and stock change.
 on:
@@ -28,16 +28,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
-      - name: "2am Sydney weekdays: every supplier Mon, Wed, Fri; CNC only Tue, Thu"
+      - name: "2am Sydney every day, every supplier"
         id: gate
         run: |
-          H=$(TZ=Australia/Sydney date +%H); D=$(TZ=Australia/Sydney date +%u)   # D: 1 = Monday ... 7 = Sunday
-          if [ "${{ github.event_name }}" = "schedule" ] && { [ "$H" != "02" ] || [ "$D" -gt 5 ]; }; then
-            echo "Not 2am on a weekday in Sydney; skipping this trigger."; echo "go=false" >> "$GITHUB_OUTPUT"
+          H=$(TZ=Australia/Sydney date +%H)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$H" != "02" ]; then
+            echo "Not 2am in Sydney (daylight saving switch); skipping this trigger."; echo "go=false" >> "$GITHUB_OUTPUT"
           else echo "go=true" >> "$GITHUB_OUTPUT"; fi
-          if [ "${{ github.event_name }}" = "schedule" ] && { [ "$D" = "2" ] || [ "$D" = "4" ]; }; then
-            echo "CNC only today (Tuesday or Thursday)."; echo "only=cnc" >> "$GITHUB_OUTPUT"
-          fi
       - uses: actions/checkout@v4
         if: steps.gate.outputs.go == 'true'
       - uses: actions/setup-python@v5
