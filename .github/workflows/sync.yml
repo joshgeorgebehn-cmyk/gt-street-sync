@@ -1,0 +1,51 @@
+name: CNC price and stock sync
+
+on:
+  schedule:
+    # 17:15 UTC = 4:15am Sydney (daylight time), after CNC's overnight catalogue refresh
+    - cron: "15 17 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: report only, change nothing"
+        type: boolean
+        default: true
+
+concurrency:
+  group: cnc-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run sync
+        env:
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+          # Scheduled runs change prices and stock only once the repository variable LIVE is set to true.
+          DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && inputs.dry_run) || (github.event_name == 'schedule' && vars.LIVE != 'true')) && '1' || '0' }}
+          PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
+          MIN_PRICE: ${{ vars.MIN_PRICE || '150' }}
+          MAX_DROP: ${{ vars.MAX_DROP || '0.30' }}
+          JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
+          JUST_JAP: ${{ vars.JUST_JAP || '1' }}
+        run: python3 sync.py
+      - name: Summary
+        if: always()
+        run: test -f report.md && cat report.md >> "$GITHUB_STEP_SUMMARY" || echo "No report" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sync-report
+          path: |
+            report.md
+            report.json
+          retention-days: 30
