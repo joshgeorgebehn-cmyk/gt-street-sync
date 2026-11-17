@@ -115,3 +115,5 @@ jobs:
             delivery.json
           retention-days: 30
           if-no-files-found: ignore
+
+# Schedules re-saved 18 Nov 2026 so they bind to the repository owner account.

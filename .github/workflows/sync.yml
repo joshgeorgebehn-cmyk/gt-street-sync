@@ -118,3 +118,5 @@ jobs:
             channels.md
             maintenance.md
           retention-days: 60
+
+# Schedules re-saved 18 Nov 2026 so they bind to the repository owner account.
