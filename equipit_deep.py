@@ -19,8 +19,13 @@ def main():
                 try:
                     d = r.json()
                     if isinstance(d, dict):
-                        first = next((v for v in d.values() if isinstance(v, list) and v and isinstance(v[0], dict)), None)
-                        keys[k] = {"top": sorted(d.keys())[:20], "item": sorted(first[0].keys())[:40] if first else []}
+                        m = d.get("model")
+                        def ks(x, depth=0):
+                            if isinstance(x, dict): return {kk: (ks(vv, depth+1) if depth < 2 else type(vv).__name__) for kk, vv in list(x.items())[:40]}
+                            if isinstance(x, list): return [f"list[{len(x)}]", ks(x[0], depth+1) if x else None]
+                            return type(x).__name__
+                        keys[k] = {"top": sorted(d.keys())[:20], "model": ks(m)}
+                        if r.request.method == "GET": keys[k]["query_names"] = sorted(dict(__import__("urllib.parse").parse.parse_qsl(u.query)).keys())
                     elif isinstance(d, list) and d and isinstance(d[0], dict):
                         keys[k] = {"item": sorted(d[0].keys())[:40]}
                 except Exception: pass

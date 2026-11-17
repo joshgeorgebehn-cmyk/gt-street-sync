@@ -36,6 +36,9 @@ jobs:
           if [ "$PORTAL" = "equipit" ]; then
             python3 -m pip install -q playwright && python3 -m playwright install --with-deps chromium
             python3 -W ignore equipit_deep.py
+          elif [ "$PORTAL" = "cooldrive" ]; then
+            python3 -m pip install -q playwright && python3 -m playwright install --with-deps chromium
+            python3 -W ignore deep_probe2.py
           else
-            python3 -W ignore deep_probe.py
+            python3 -W ignore deep_probe2.py
           fi
