@@ -56,6 +56,23 @@
     "note": "Revzone is an authorised H&R retailer, not GT Street's H&R supplier. Price only: stock is never changed from this source."
   },
   {
+    "id": "bilstein-revzone",
+    "name": "Bilstein (Revzone price check)",
+    "store": "https://shop.revzone.com.au",
+    "catalogue_path": "/collections/bilstein/products.json",
+    "brand": "Bilstein",
+    "query": "vendor:\"Bilstein\"",
+    "sku_prefix": "BIL-",
+    "match_title": false,
+    "set_sku": false,
+    "use_stock": false,
+    "price_offset": 1,
+    "min_price": 5,
+    "min_catalogue": 1000,
+    "enabled": true,
+    "note": "Revzone is an authorised Bilstein dealer, used as the price source only. Stock is never changed from this source. Chosen by the owner 18 Nov 2026."
+  },
+  {
     "id": "justjap",
     "name": "Just Jap",
     "store": "https://justjap.com",
@@ -66,6 +83,7 @@
     "price_offset": 1,
     "min_price": 5,
     "min_catalogue": 1000,
-    "enabled": false
+    "enabled": true,
+    "note": "JustJap is the Australian distributor for Blitz, Fujitsubo, JJR, HPI and others. Enabled 18 Nov 2026 at the owner's direction; price and stock from JustJap's own site."
   }
 ]

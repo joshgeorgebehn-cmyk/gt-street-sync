@@ -128,6 +128,15 @@ def load_verify(d: str) -> dict:
             "mismatches": [l[2:] for l in md.splitlines() if l.startswith("- ") and (l[2:].startswith(("PRICE", "STOCK")))]}
 
 
+def active_notices(today: str) -> list[dict]:
+    """Dated notices (notices.json) that apply to today's digest. Shown at the top of the email while they run."""
+    try:
+        items = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "notices.json")))
+    except (OSError, ValueError):
+        return []
+    return [n for n in items if isinstance(n, dict) and str(n.get("from", "")) <= today <= str(n.get("to", "9999"))]
+
+
 def load_checks(manifest: dict) -> list[dict]:
     out = []
     for c in manifest.get("checks", []):
@@ -355,6 +364,9 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
                      + (f'found <b style="color:{RED}">{len(m["mismatches"])} mismatch{"es" if len(m["mismatches"]) != 1 else ""}</b>.' if m["mismatches"] else "matched every one."))
         else:
             lead += f' <b style="color:{RED}">The independent recheck did not run for every check.</b>'
+    for n in active_notices(manifest.get("digest_date", "")):
+        inner.append(f'<tr><td style="padding:0 28px 14px"><div style="background:{LIGHT};border-left:4px solid {RED};padding:12px 14px;border-radius:6px;font-size:14px;line-height:1.5">'
+                     f'<b>{esc(n.get("title", "Notice"))}</b><br>{esc(n.get("text", ""))}</div></td></tr>')
     inner.append(f'<tr><td style="padding:6px 28px 14px;font-size:15px;line-height:1.5;color:#333">{lead}</td></tr>')
 
     sold = sum(1 for s in m["stock"] if s.get("state") == "out" or s.get("now") == "Out of stock")
