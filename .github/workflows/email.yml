@@ -1,11 +1,11 @@
 name: Daily digest email
 
-# 7:30am Sydney every day: emails the result of the most recent supplier sync (normally the 2am run) to
-# Joshua, Will and Billy. If no sync has finished in the last 12 hours, the email says so.
+# 7am Sydney every day: one email to Joshua, Will and Billy summarising both checks since the last email
+# (yesterday's 12pm run and this morning's 2am run). Missing runs are reported in the email.
 on:
   schedule:
-    - cron: "30 20 * * *"   # 7:30am AEDT
-    - cron: "30 21 * * *"   # 7:30am AEST
+    - cron: "0 20 * * *"   # 7am AEDT
+    - cron: "0 21 * * *"   # 7am AEST
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Only at 7:30am Sydney
+      - name: Only at 7am Sydney
         id: gate
         run: |
           H=$(TZ=Australia/Sydney date +%H)
@@ -29,31 +29,35 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         with:
           python-version: "3.12"
-      - name: Fetch the latest sync result
+      - name: Fetch the sync results from the last 24 hours
         id: latest
         if: steps.gate.outputs.go == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN=$(gh run list --workflow sync.yml --status completed --limit 10 --json databaseId,conclusion,createdAt,event \
-                --jq '[.[] | select(.conclusion != "skipped" and .conclusion != "cancelled")][0]')
-          ID=$(echo "$RUN" | python3 -c "import json,sys; print(json.load(sys.stdin)['databaseId'])")
-          CONC=$(echo "$RUN" | python3 -c "import json,sys; print(json.load(sys.stdin)['conclusion'])")
-          AGE=$(echo "$RUN" | python3 -c "import json,sys,datetime; c=datetime.datetime.fromisoformat(json.load(sys.stdin)['createdAt'].replace('Z','+00:00')); print(int((datetime.datetime.now(datetime.timezone.utc)-c).total_seconds()//3600))")
-          echo "Latest sync run $ID, $CONC, $AGE hours ago"
-          echo "url=${{ github.server_url }}/${{ github.repository }}/actions/runs/$ID" >> "$GITHUB_OUTPUT"
-          if [ "$AGE" -le 12 ] && gh run download "$ID" -n sync-report -D .; then
-            echo "status=$CONC" >> "$GITHUB_OUTPUT"
-          else
-            echo "No sync finished in the last 12 hours, or its report is missing."; rm -f report.json; echo "status=failure" >> "$GITHUB_OUTPUT"
-          fi
+          gh run list --workflow sync.yml --limit 20 --json databaseId,conclusion,status,createdAt,event > runs.json
+          python3 - <<'PY' > picked.txt
+          import json, datetime
+          now = datetime.datetime.now(datetime.timezone.utc)
+          runs = [r for r in json.load(open("runs.json")) if r["status"] == "completed" and r["conclusion"] not in ("skipped", "cancelled")
+                  and (now - datetime.datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00"))).total_seconds() < 24 * 3600]
+          for r in reversed(runs[:2]):  # oldest first
+              print(r["databaseId"], r["conclusion"], r["createdAt"])
+          PY
+          cat picked.txt
+          DIRS=""; STAT="success"; URLS=""
+          while read ID CONC CREATED; do
+            if gh run download "$ID" -n sync-report -D "run_$ID"; then DIRS="$DIRS run_$ID|$CONC|$CREATED|${{ github.server_url }}/${{ github.repository }}/actions/runs/$ID"; fi
+          done < picked.txt
+          echo "dirs=$DIRS" >> "$GITHUB_OUTPUT"
       - name: Send the digest
         if: steps.gate.outputs.go == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO_OWNER: ${{ github.repository_owner }}
-          RUN_URL: ${{ steps.latest.outputs.url }}
-          JOB_STATUS: ${{ steps.latest.outputs.status }}
+          REPORT_DIRS: ${{ steps.latest.outputs.dirs }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/sync.yml
+          JOB_STATUS: success
           EMAIL_TO: ${{ vars.EMAIL_TO || 'joshua.b@gtstreet.au,will.k@gtstreet.au,billy@breadenmedia.com.au' }}
           MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
           MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}

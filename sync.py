@@ -14,8 +14,8 @@ Every run:
   6. Writes a report (report.md, report.json) and stamps the shop metafield gt_sync.last_run.
 
 Safety rules (change with environment variables):
-  * A new CNC price below MIN_PRICE (default $10, a guard against misread pages) is held and reported.
-    MAX_DROP (default 0.20) holds any drop of more than 20% overnight for a person to check.
+  * Price rule: whatever the supplier's page shows customers, less $1. Nothing is held. Drops over BIG_DROP (20%)
+    are applied and highlighted in the email. A supplier price of $1 or less is matched, never taken to $0.
   * Anything that cannot be matched to a CNC page is left exactly as it is and reported.
   * Offsets missing from CNC's offset list are reported only.
   * DRY_RUN=1 changes nothing in Shopify.
@@ -47,7 +47,7 @@ CNC_SET_SKU = os.environ.get("CNC_SET_SKU", "1") == "1"
 # and are never given supplier quantities.
 STOCK_QTY = int(os.environ.get("STOCK_QTY", "20"))
 OWN_STOCK_TAG = os.environ.get("OWN_STOCK_TAG", "own-stock").lower()
-MAX_DROP = float(os.environ.get("MAX_DROP", "0.20"))  # a drop of more than 20% overnight is held for a person to check
+BIG_DROP = float(os.environ.get("BIG_DROP", "0.20"))  # drops bigger than this are applied, and highlighted in the email
 CNC_DELAY = float(os.environ.get("CNC_DELAY", "0.5"))
 CNC_WORKERS = int(os.environ.get("CNC_WORKERS", "4"))
 VENDORS = ("GT Form", "JSR", "Black Rock")
@@ -251,15 +251,10 @@ def cnc_price(t):
     struct = None
     m = re.search(r'"@type":"PriceSpecification","price":"([\d.]+)"', t)
     if m: struct = _money(m.group(1))
-    if shown is None and struct is None: return None, "no price found", ""
-    if shown is None or struct is None: return None, f"only one price reading (shown {shown}, structured {struct})", ""
-    if abs(shown - struct) > 0.5:
-        # Readings differ. If the price customers see is the higher one, use it (it is what CNC really sells at, so
-        # we stay within market and do not undercut). If the structured figure is the higher one, we would be pricing
-        # above what CNC shows, so the variant is left unchanged and reported.
-        if shown > struct: return shown, "", f"readings differed (shown {shown}, structured {struct}); used the higher, shown price"
-        return None, f"price readings disagree (shown {shown}, structured {struct}, shown is lower)", ""
-    return shown, "", ""
+    # Rule: whatever price CNC's page shows customers, less $1. The structured figure is only recorded when it differs.
+    if shown is None: return None, f"no price shown on the page (structured data says {struct})", ""
+    note = f"structured data says {struct}, page shows {shown}; used the page" if struct is not None and abs(shown - struct) > 0.5 else ""
+    return shown, "", note
 
 def cnc_page(url):
     st, t = http(url)
@@ -446,7 +441,8 @@ def main():
                 report.setdefault("sku_changes", []).append({"product": name, "from": v["sku"], "to": new_sku})
         cnc_state = ("out", 0) if pg["out"] else (("backorder", 0) if pg.get("backorder") else ("in", STOCK_QTY))
         decisions.append((p, v, name, pg["price"], cnc_state, PRICE_OFFSET, MIN_PRICE))
-        report.setdefault("cnc_applied", []).append({"variant": v["id"], "url": url, "name": name})
+        report.setdefault("cnc_applied", []).append({"variant": v["id"], "url": url, "name": name, "state": cnc_state[0],
+                                                "own": OWN_STOCK_TAG in [t.lower() for t in p.get("tags", [])]})
 
     # Other suppliers with a public Shopify catalogue (suppliers.json).
     report["suppliers"] = {}
@@ -492,19 +488,23 @@ def main():
                     report.setdefault("stock_unverified", []).append(f"{p['title']} ({name_} {hit[2] or hit[3]})")
             decisions.append((p, v, f"{p['title']} ({name_} {hit[2] or hit[3]})", hit[0], src, offset, floor))
             report.setdefault("supplier_applied", []).append({"variant": v["id"], "store": cfg["store"].rstrip("/"),
-                "handle": hit[3], "sku": hit[2], "offset": offset, "stock": src is not None, "state": src[0] if src else None, "name": p["title"]})
+                "handle": hit[3], "sku": hit[2], "vid": hit[4], "offset": offset,
+                "stock": src is not None and OWN_STOCK_TAG not in [t.lower() for t in p.get("tags", [])], "state": src[0] if src else None, "name": p["title"]})
 
     updates = {}  # product id -> list of variant inputs
     stock_targets = {}  # inventory item id -> available quantity to hold at the store location
     for p, v, name, src_price, src, offset, floor in decisions:
         inp = {"id": v["id"]}
         new_price = round(src_price - offset, 2)
+        if new_price <= 0:  # supplier price $1 or less: cannot go $1 under, so match their price
+            new_price = round(src_price, 2)
+            report.setdefault("at_supplier_price", []).append(name)
         if abs(new_price - v["price"]) >= 0.01:
-            if new_price < floor or (v["price"] > 0 and new_price < v["price"] * (1 - MAX_DROP)):
-                report["held"].append({"variant": name, "product": p["title"], "id": v["id"], "current": v["price"], "cnc": src_price, "image": p.get("image", ""), "handle": p.get("handle", "")})
-            else:
-                inp["price"] = f"{new_price:.2f}"
-                report["price_changes"].append({"variant": name, "product": p["title"], "from": v["price"], "to": new_price, "image": p.get("image", ""), "handle": p.get("handle", "")})
+            inp["price"] = f"{new_price:.2f}"
+            rec = {"variant": name, "id": v["id"], "product": p["title"], "from": v["price"], "to": new_price, "image": p.get("image", ""), "handle": p.get("handle", "")}
+            report["price_changes"].append(rec)
+            if v["price"] > 0 and new_price < v["price"] * (1 - BIG_DROP):
+                report.setdefault("big_drops", []).append(rec)
         own = OWN_STOCK_TAG in [t.lower() for t in p.get("tags", [])]
         if src is not None and not own and v["item"]:
             state, sq = src
@@ -514,7 +514,7 @@ def main():
             # In stock: 20. Low stock: the supplier's exact quantity. Back order and out of stock: 0 (back order stays orderable).
             stock_targets[v["item"]] = STOCK_QTY if state == "in" else (sq if state == "low" else 0)
             if our_state(v) != state:  # an actual change today
-                report.setdefault("stock_changes", []).append({"variant": name, "product": p["title"],
+                report.setdefault("stock_changes", []).append({"variant": name, "id": v["id"], "prev": our_state(v), "product": p["title"],
                     "now": STATE_LABEL[state] + (f" ({sq} left)" if state == "low" else ""), "state": state,
                     "image": p.get("image", ""), "handle": p.get("handle", "")})
             (report["sold_out"] if state == "out" else report["back_in_stock"]).append(name)
@@ -593,7 +593,7 @@ def finish(report, started, stock_targets, updates):
           f"- GT Street products checked: {report['products']}",
           f"- CNC pages checked: {report.get('cnc_pages_read', 0)} (all read live; skipped: {report.get('cnc_pages_failed', 0)})",
           f"- Price changes: {len(report['price_changes'])}",
-          f"- Held for review (under ${MIN_PRICE:.0f} or over the drop limit): {len(report['held'])}",
+          f"- Big drops applied (over {BIG_DROP:.0%}, highlighted): {len(report.get('big_drops', []))}",
           f"- Sold out at the supplier: {len(report['sold_out'])}",
           f"- In stock at the supplier: {len(report['back_in_stock'])}",
           f"- Stock quantities changed: {report.get('stock_quantities_updated', 0)}; newly stocked at the location: {report.get('stock_stocked_at_location', 0)}",

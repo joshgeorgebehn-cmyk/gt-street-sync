@@ -30,14 +30,59 @@ def thumb(url, w=96):
 def money(x): return f"${float(x):,.2f}"
 def esc(x): return html.escape(str(x))
 
-try: r = json.load(open("report.json"))
-except Exception: r = None
 status = os.environ.get("JOB_STATUS", "unknown")
 run_url = os.environ.get("RUN_URL", "")
 owner = os.environ.get("REPO_OWNER", "")
-local = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=11)))
+SYD = datetime.timezone(datetime.timedelta(hours=11))
+try:
+    from zoneinfo import ZoneInfo; SYD = ZoneInfo("Australia/Sydney")
+except Exception: pass
+local = datetime.datetime.now(datetime.timezone.utc).astimezone(SYD)
 now = local.strftime("%a %d %b %Y")
-verify = read("verify.md")
+runs = []  # one entry per check summarised: label, conclusion, url, report, verify text
+
+def vnum(txt, pat):
+    m = re.search(pat, txt); return int(m.group(1)) if m else None
+
+if os.environ.get("REPORT_DIRS") is not None:
+    for part in os.environ["REPORT_DIRS"].split():
+        d, conc, created, url = (part.split("|") + ["", "", "", ""])[:4]
+        try: rep = json.load(open(os.path.join(d, "report.json")))
+        except Exception: rep = None
+        when = datetime.datetime.fromisoformat(created.replace("Z", "+00:00")).astimezone(SYD) if created else None
+        runs.append({"label": when.strftime("%-I%p %a").replace("AM", "am").replace("PM", "pm") if when else "run",
+                     "conc": conc, "url": url, "r": rep, "v": read(os.path.join(d, "verify.md"))})
+else:
+    try: rep = json.load(open("report.json"))
+    except Exception: rep = None
+    runs.append({"label": "this run", "conc": status, "url": run_url, "r": rep, "v": read("verify.md")})
+
+good = [x for x in runs if x["r"]]
+if not good:
+    r = None
+else:
+    # Merge: a variant changed in both checks shows once, from its price before the first to its price after the last.
+    r = dict(good[-1]["r"])
+    pc, sc = {}, {}
+    for x in good:
+        for c in x["r"].get("price_changes", []):
+            k = c.get("id") or c["variant"]
+            pc[k] = dict(c, **{"from": pc[k]["from"]}) if k in pc else dict(c)
+        for c in x["r"].get("stock_changes", []):
+            k = c.get("id") or c["variant"]
+            sc[k] = dict(c, prev=sc[k].get("prev")) if k in sc else dict(c)
+    r["price_changes"] = [c for c in pc.values() if abs(float(c["to"]) - float(c["from"])) >= 0.01]
+    r["stock_changes"] = [c for c in sc.values() if not c.get("prev") or c.get("prev") != c.get("state")]
+    r["big_drops"] = [c for c in r["price_changes"] if float(c["from"]) > 0 and float(c["to"]) < float(c["from"]) * 0.8]
+    r["errors"] = [f"{x['label']}: " + (e if isinstance(e, str) else json.dumps(e)) for x in good for e in x["r"].get("errors", [])]
+    if any(x["conc"] not in ("success", "") for x in runs): status = "failure"
+    elif status == "unknown": status = "success"
+missing_runs = [x for x in runs if not x["r"]]
+vt = [x["v"] for x in runs if x["v"]]
+vck = sum(vnum(t, r"re-checked against the supplier: (\d+)") or 0 for t in vt)
+vbd = sum(vnum(t, r"Mismatches: (\d+)") or 0 for t in vt)
+mism = [l for t in vt for l in t.splitlines() if l.startswith("- ") and ("PRICE" in l or "STOCK" in l)]
+verify = (f"- Variants re-checked against the supplier: {vck}\n- Mismatches: {vbd}\n" + ("## Mismatches\n" + "\n".join(mism) if mism else "")) if vt else ""
 vfail = "## Mismatches" in verify
 vchecked = re.search(r"re-checked against the supplier: (\d+)", verify)
 vbad = re.search(r"Mismatches: (\d+)", verify)
@@ -114,8 +159,8 @@ def shell(inner, ok, headline):
             f'<tr><td style="padding:24px 28px 4px"><div style="font-size:22px;font-weight:700">{"&#10003; " if ok else "&#9888; "}{headline}</div></td></tr>'
             + inner +
             f'<tr><td style="padding:28px;font-size:12px;color:{GREY};line-height:1.6;border-top:1px solid {LINE}">'
-            f'Prices are set at each supplier\'s live website price less $1. Stock shows 20 when the supplier has it, 0 when they do not. '
-            f'Drops over 20% are never applied automatically. <a href="{run_url}" style="color:{RED}">Full report and downloads</a></td></tr>'
+            f'Prices are whatever each supplier\'s website shows, less $1. Stock mirrors the supplier: In stock 20, Low stock their exact quantity, Back order 0 and still orderable, Out of stock 0. '
+            f'<a href="{run_url}" style="color:{RED}">Full reports and downloads</a></td></tr>'
             f'</table></td></tr></table></body></html>')
 
 if r is None:
@@ -143,17 +188,29 @@ else:
     subject = f"Daily Digest: Stock and Pricing - {n} change{'s' if n != 1 else ''}"
     headline = "All checks passed" if ok and not held else ("Applied, a few items need you" if ok else "Needs attention")
     inner = []
-    lead = (f"{len(ch)} price change{'s' if len(ch) != 1 else ''} and {len(sc)} stock change{'s' if len(sc) != 1 else ''} were applied to the site."
+    lead = ((f"Across {len(good)} checks, " if len(good) > 1 else "") + f"{len(ch)} price change{'s' if len(ch) != 1 else ''} and {len(sc)} stock change{'s' if len(sc) != 1 else ''} were applied to the site."
             if (ch or sc) else "Every supplier was checked and nothing needed changing.")
     if vchecked:
-        lead += (f" An independent recheck of {vchecked.group(1)} random products against the supplier websites "
+        lead += (f" An independent recheck of {vchecked.group(1)} products (every amended one plus a random sample) against the supplier websites "
                  + (f'found <b style="color:{RED}">{vbad.group(1)} mismatch{"es" if vbad and vbad.group(1) != "1" else ""}</b>.' if vfail else "matched every one."))
     else:
         lead += f' <b style="color:{RED}">The independent recheck did not run.</b>'
     inner.append(f'<tr><td style="padding:6px 28px 14px;font-size:15px;line-height:1.5;color:#333">{lead}</td></tr>')
     inner.append(f'<tr><td style="padding:0 22px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>'
                  + tile(len(ch), "Price changes") + tile(sold, "Sold out", RED if sold else INK) + tile(restocked, "Restocked", GREEN if restocked else INK)
-                 + tile(len(held) + len(errs), "Need you", RED if (held or errs) else INK) + '</tr></table></td></tr>')
+                 + tile(len(held) + len(errs) + vbd, "Need you", RED if (held or errs or vbd) else INK) + '</tr></table></td></tr>')
+
+    if len(runs) > 1 or missing_runs:
+        rows = []
+        for x in runs:
+            rv = vnum(x["v"], r"re-checked against the supplier: (\d+)"); rb = vnum(x["v"], r"Mismatches: (\d+)")
+            if not x["r"]: res = f'<b style="color:{RED}">did not finish</b>'
+            elif rb: res = f'<b style="color:{RED}">{rb} mismatches</b> in {rv:,} rechecked'
+            elif rv is not None: res = f'<span style="color:{GREEN}">&#10003;</span> {len(x["r"].get("price_changes", []))} price and {len(x["r"].get("stock_changes", []))} stock changes; {rv:,} rechecked, all matched'
+            else: res = f'<b style="color:{RED}">recheck did not run</b>'
+            rows.append(f'<tr><td style="padding:9px 0;border-bottom:1px solid {LINE};font-size:14px;font-weight:600;white-space:nowrap"><a href="{esc(x["url"])}" style="color:{INK};text-decoration:none">{esc(x["label"])} check</a></td>'
+                        f'<td style="padding:9px 0 9px 12px;border-bottom:1px solid {LINE};font-size:13px;color:{GREY};text-align:right">{res}</td></tr>')
+        inner.append(section("Checks in this digest", "Every supplier website read live at each check, and every amended product rechecked.", rows))
 
     # 1. Things that need a person, first.
     if vfail:
@@ -168,6 +225,12 @@ else:
         rows = [item_row(h, f'<span style="color:{GREY}">site</span> {money(h["current"])}<br><span style="color:{GREY}">supplier</span> <b>{money(h["cnc"])}</b>') for h in g[:50]]
         inner.append(section("Held for your review", f"{len(held)} price{'s' if len(held) != 1 else ''} not changed.", rows,
                              "The supplier price would cut more than 20%, or fall under the minimum. If the supplier's page is right, update these by hand."))
+
+    bd = r.get("big_drops", [])
+    if bd:
+        g = group(bd, lambda c: (round(float(c["from"]), 2), round(float(c["to"]), 2)))
+        rows = [item_row(c, f'<span style="color:{GREY};text-decoration:line-through;font-size:13px">{money(c["from"])}</span> <b>{money(c["to"])}</b><br>{pill("&#9660; " + str(round((1 - float(c["to"]) / float(c["from"])) * 100)) + "%", RED)}') for c in g[:40]]
+        inner.append(section("Big price drops applied", f"{len(bd)} price{'s' if len(bd) != 1 else ''} fell more than 20%. Applied as the supplier shows; worth a glance.", rows))
 
     # 2. What changed.
     if ch:
