@@ -2,10 +2,12 @@ name: Supplier price and stock sync
 
 on:
   schedule:
-    # 2am Sydney all year. GitHub schedules in UTC, so both 15:00 UTC (2am daylight time) and 16:00 UTC
-    # (2am standard time) are listed; the first step skips whichever one isn't 2am in Sydney that day.
-    - cron: "0 15 * * *"
-    - cron: "0 16 * * *"
+    # 2am and 2pm Sydney all year. GitHub schedules in UTC, so each run is listed for both daylight time and
+    # standard time; the first step skips whichever one isn't 2am or 2pm in Sydney that day.
+    - cron: "0 15 * * *"   # 2am AEDT
+    - cron: "0 16 * * *"   # 2am AEST
+    - cron: "0 3 * * *"    # 2pm AEDT
+    - cron: "0 4 * * *"    # 2pm AEST
   workflow_dispatch:
     inputs:
       dry_run:
@@ -26,11 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
-      - name: Only run at 2am Sydney time
+      - name: Only run at 2am or 2pm Sydney time
         id: gate
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(TZ=Australia/Sydney date +%H)" != "02" ]; then
-            echo "Not 2am in Sydney (daylight saving switch); skipping this trigger."; echo "go=false" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(TZ=Australia/Sydney date +%H)" != "02" ] && [ "$(TZ=Australia/Sydney date +%H)" != "14" ]; then
+            echo "Not 2am or 2pm in Sydney (daylight saving switch); skipping this trigger."; echo "go=false" >> "$GITHUB_OUTPUT"
           else echo "go=true" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
         if: steps.gate.outputs.go == 'true'
