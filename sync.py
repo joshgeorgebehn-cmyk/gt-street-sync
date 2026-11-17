@@ -247,6 +247,7 @@ XF_STORE = os.environ.get("XF_STORE", "https://www.xforce.com.au")
 XF_VENDOR = os.environ.get("XF_VENDOR", "XForce")
 XF_PRICE_OFFSET = float(os.environ.get("XF_PRICE_OFFSET", os.environ.get("PRICE_OFFSET", "1")))
 XF_MIN_PRICE = float(os.environ.get("XF_MIN_PRICE", "5"))
+XF_SET_SKU = os.environ.get("XF_SET_SKU", "1") == "1"  # replace placeholder SKUs with XForce's real part numbers
 XF_STOP = {"xforce", "system", "exhaust", "with", "and", "the", "for", "inch", "in", "to", "of"}
 
 def xf_key(title):
@@ -258,19 +259,21 @@ def xf_key(title):
 def xf_catalogue():
     """XForce's public Shopify catalogue: {title word set: (price, available, sku, handle)} for single-variant products.
     Titles that appear more than once on XForce are dropped, so an ambiguous match is never used."""
-    seen, out, page = {}, {}, 1
+    seen, out, by_sku, page = {}, {}, {}, 1
     while page < 40:
         st, txt = http(f"{XF_STORE}/products.json?limit=250&page={page}")
-        if st != 200: return None if page == 1 else out
+        if st != 200: return (None, None) if page == 1 else ({k: v for k, v in out.items() if seen[k] == 1}, by_sku)
         ps = json.loads(txt).get("products", [])
         if not ps: break
         for p in ps:
             if len(p["variants"]) != 1: continue
             k, v = xf_key(p["title"]), p["variants"][0]
             seen[k] = seen.get(k, 0) + 1
-            out[k] = (float(v["price"]), bool(v.get("available", True)), v.get("sku") or "", p["handle"])
+            rec = (float(v["price"]), bool(v.get("available", True)), (v.get("sku") or "").strip().strip("[]").strip(), p["handle"])
+            out[k] = rec
+            if rec[2]: by_sku[rec[2].upper()] = rec
         page += 1; time.sleep(1.2)
-    return {k: v for k, v in out.items() if seen[k] == 1}
+    return {k: v for k, v in out.items() if seen[k] == 1}, by_sku
 
 # ---------------------------------------------------------------- main
 def main():
@@ -318,6 +321,7 @@ def main():
         report["errors"].append(f"{len(failed)} of {len(urls)} CNC pages could not be read; CNC products left unchanged.")
         plan = []
 
+    sku_set = {}  # variant id -> supplier part number to write
     decisions = []  # (product, variant, display name, source price, source out of stock, offset)
     for p, v, url in plan:
         pg = pages[url]
@@ -344,17 +348,21 @@ def main():
 
     # XForce: products with vendor XForce, matched on the exact product title (word order ignored).
     if os.environ.get("XFORCE", "1") == "1":
-        xf = xf_catalogue()
+        xf, xf_sku = xf_catalogue()
         if xf is None or len(xf) < 300:
             report["errors"].append("XForce catalogue could not be read; XForce products left unchanged.")
         else:
             xfp = shopify_products(f'vendor:"{XF_VENDOR}"') if source == "admin" else [x for x in storefront_products(all_vendors=True) if x.get("vendor", "").lower() == XF_VENDOR.lower()]
             report["xf_products"] = len(xfp); report["xf_unmatched"] = []
             for p in xfp:
-                hit = xf.get(xf_key(p["title"]))
-                if not hit or len(p["variants"]) != 1:
+                v = p["variants"][0] if len(p["variants"]) == 1 else None
+                # Real XForce part number first, then the exact title.
+                hit = (xf_sku.get(v["sku"].upper()) if v and v["sku"] else None) or (xf.get(xf_key(p["title"])) if v else None)
+                if not hit:
                     report["xf_unmatched"].append(p["title"]); continue
-                v = p["variants"][0]
+                if XF_SET_SKU and hit[2] and v["sku"] != hit[2]:
+                    sku_set[v["id"]] = hit[2]
+                    report.setdefault("sku_changes", []).append({"product": p["title"], "from": v["sku"], "to": hit[2]})
                 decisions.append((p, v, f"{p['title']} (XForce {hit[2] or hit[3]})", hit[0], not hit[1], XF_PRICE_OFFSET, XF_MIN_PRICE))
 
     updates = {}  # product id -> list of variant inputs
@@ -377,6 +385,8 @@ def main():
             if v["tracked"] is True:
                 inp["inventoryItem"] = {"tracked": False}
                 report["back_in_stock"].append(name)
+        if v["id"] in sku_set:
+            inp.setdefault("inventoryItem", {})["sku"] = sku_set[v["id"]]
         if len(inp) > 1:
             updates.setdefault(p["id"], []).append(inp)
 
@@ -425,6 +435,7 @@ def finish(report, started, to_zero, updates):
           f"- Variants with no CNC page for that size and PCD (left alone): {len(report['unmatched_variants'])}",
           f"- Offsets CNC does not list (reported only): {len(report['missing_offsets'])}",
           f"- Just Jap products checked: {report.get('jj_products', 0)} (SKUs not on Just Jap: {len(report.get('jj_unmatched', []))})",
+          f"- Part numbers replaced with XForce's: {len(report.get('sku_changes', []))}",
           f"- XForce products checked: {report.get('xf_products', 0)} (not matched to xforce.com.au: {len(report.get('xf_unmatched', []))})",
           f"- Errors: {len(report['errors'])}", ""]
     if report["held"]:
