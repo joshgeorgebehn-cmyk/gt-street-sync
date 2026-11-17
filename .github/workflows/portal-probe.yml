@@ -8,7 +8,7 @@ on:
       portal:
         description: "Portal to probe"
         type: choice
-        options: [nyc, cooldrive]
+        options: [nyc, cooldrive, equipit]
         default: nyc
 
 permissions:
@@ -30,4 +30,12 @@ jobs:
           NYC_PASS: ${{ secrets.NYC_PASS }}
           COOLDRIVE_USER: ${{ secrets.COOLDRIVE_USER }}
           COOLDRIVE_PASS: ${{ secrets.COOLDRIVE_PASS }}
-        run: python3 -W ignore portal_login.py
+          EQUIPIT_USER: ${{ secrets.EQUIPIT_USER }}
+          EQUIPIT_PASS: ${{ secrets.EQUIPIT_PASS }}
+        run: |
+          if [ "$PORTAL" = "equipit" ]; then
+            python3 -m pip install -q playwright && python3 -m playwright install --with-deps chromium
+            python3 -W ignore equipit_probe.py
+          else
+            python3 -W ignore portal_login.py
+          fi
