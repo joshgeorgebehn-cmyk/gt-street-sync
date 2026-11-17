@@ -47,6 +47,7 @@ def main():
     except Exception:
         print("No report.json: the sync did not finish, so nothing to verify."); sys.exit(1)
     amended = {c.get("id") for c in r.get("price_changes", [])} | {c.get("id") for c in r.get("stock_changes", [])}
+    amended |= {c.get("id") for c in r.get("new_variants", [])}
     amended.discard(None)
     rnd = random.Random()
     cnc_all = r.get("cnc_applied", [])

@@ -47,6 +47,8 @@ CNC_SET_SKU = os.environ.get("CNC_SET_SKU", "1") == "1"
 # and are never given supplier quantities.
 STOCK_QTY = int(os.environ.get("STOCK_QTY", "20"))
 OWN_STOCK_TAG = os.environ.get("OWN_STOCK_TAG", "own-stock").lower()
+ADD_NEW_SIZES = os.environ.get("ADD_NEW_SIZES", "1") == "1"  # create sizes CNC sells that GT Street doesn't list yet
+NEW_VARIANT_LIMIT = int(os.environ.get("NEW_VARIANT_LIMIT", "1500"))  # per run; the rest are added next run
 BIG_DROP = float(os.environ.get("BIG_DROP", "0.20"))  # drops bigger than this are applied, and highlighted in the email
 CNC_DELAY = float(os.environ.get("CNC_DELAY", "0.5"))
 CNC_WORKERS = int(os.environ.get("CNC_WORKERS", "4"))
@@ -149,10 +151,10 @@ query($cursor:String,$q:String!){ products(first:50, after:$cursor, query:$q){
   pageInfo{hasNextPage endCursor}
   nodes{ id title handle vendor status tags featuredMedia{ preview{ image{ url } } }
     variants(first:250){ pageInfo{hasNextPage endCursor} nodes{ id sku price inventoryQuantity inventoryPolicy selectedOptions{name value}
-      inventoryItem{ id tracked } } } } } }"""
+      inventoryItem{ id tracked } disc: metafield(namespace:"gt", key:"discontinued"){ id value } } } } } }"""
 MORE_VARIANTS_Q = """
 query($id:ID!,$cursor:String){ product(id:$id){ variants(first:250, after:$cursor){ pageInfo{hasNextPage endCursor}
-  nodes{ id sku price inventoryQuantity inventoryPolicy selectedOptions{name value} inventoryItem{ id tracked } } } } }"""
+  nodes{ id sku price inventoryQuantity inventoryPolicy selectedOptions{name value} inventoryItem{ id tracked } disc: metafield(namespace:"gt", key:"discontinued"){ id value } } } } }"""
 
 def shopify_products(search=None):
     q = search or "(" + " OR ".join(f'vendor:"{v}"' for v in VENDORS) + ")"
@@ -166,7 +168,7 @@ def shopify_products(search=None):
                 vs += more["nodes"]; vinfo = more["pageInfo"]
             img = ((((p.get("featuredMedia") or {}).get("preview") or {}).get("image")) or {}).get("url", "")
             out.append({"id": p["id"], "title": p["title"], "handle": p["handle"], "status": p["status"], "tags": p.get("tags", []), "image": img, "variants": [
-                {"id": v["id"], "sku": (v.get("sku") or "").strip(), "price": float(v["price"]), "qty": v.get("inventoryQuantity"), "policy": v["inventoryPolicy"],
+                {"id": v["id"], "sku": (v.get("sku") or "").strip(), "price": float(v["price"]), "qty": v.get("inventoryQuantity"), "disc": ((v.get("disc") or {}).get("id")), "policy": v["inventoryPolicy"],
                  "tracked": v["inventoryItem"]["tracked"], "item": v["inventoryItem"]["id"],
                  "opts": {o["name"]: o["value"] for o in v["selectedOptions"]}} for v in vs]})
         if not d["pageInfo"]["hasNextPage"]: break
@@ -184,7 +186,7 @@ def storefront_products(all_vendors=False):
             if not all_vendors and p["vendor"] not in VENDORS: continue
             names = [o["name"] for o in p["options"]]
             out.append({"id": p["id"], "title": p["title"], "handle": p["handle"], "status": "ACTIVE", "tags": p.get("tags", []), "variants": [
-                {"id": v["id"], "sku": (v.get("sku") or "").strip(), "price": float(v["price"]), "qty": v.get("inventoryQuantity"), "policy": None, "tracked": None, "item": None,
+                {"id": v["id"], "sku": (v.get("sku") or "").strip(), "price": float(v["price"]), "qty": v.get("inventoryQuantity"), "disc": ((v.get("disc") or {}).get("id")), "policy": None, "tracked": None, "item": None,
                  "opts": {names[i]: v[f"option{i+1}"] for i in range(len(names))}} for v in p["variants"]]})
         page += 1
     return out
@@ -406,8 +408,26 @@ def main():
                 report["unmatched_variants"].append(f"{p['title']} {size} {pcd} {off}"); continue
             plan.append((p, v, url))
 
-    urls = sorted({u for _, _, u in plan})
-    print(f"{len(products)} products, {len(plan)} variants matched, reading {len(urls)} CNC pages", flush=True)
+    # New sizes: CNC pages for a wheel range GT Street sells, in a size and PCD GT Street doesn't list yet.
+    # Only for products with the standard Rim Size / PCD / Offset options, and only when exactly one GT Street
+    # product matches the CNC range (never guess between two listings).
+    additions = []  # (product, size, pcd, url)
+    owner = {}
+    for p in products:
+        if not p["variants"] or set(p["variants"][0]["opts"]) != {"Rim Size", "PCD", "Offset"}: continue
+        k = norm(p["title"])
+        for x in ALIAS.get(k, [k]):
+            if x in ranges: owner.setdefault(x, []).append(p)
+    if ADD_NEW_SIZES:
+        have = {p["id"]: {(v["opts"].get("Rim Size"), v["opts"].get("PCD")) for v in p["variants"]} for ps in owner.values() for p in ps}
+        for (r, sz, pc), u in sorted(idx.items()):
+            ps = owner.get(r, [])
+            if len(ps) != 1: continue
+            p = ps[0]
+            if (sz, pc) in have[p["id"]]: continue
+            have[p["id"]].add((sz, pc)); additions.append((p, sz, pc, u))
+    urls = sorted({u for _, _, u in plan} | {a[3] for a in additions})
+    print(f"{len(products)} products, {len(plan)} variants matched, {len(additions)} new size and PCD pages, reading {len(urls)} CNC pages", flush=True)
     # Every CNC page is read live from cncwheels.com.au on every run. Nothing is reused from earlier runs, and
     # nothing is taken from Google or any other copy of CNC's data.
     pages = {}
@@ -421,7 +441,67 @@ def main():
     # If CNC is down or blocking, change nothing.
     if urls and len(failed) / len(urls) > 0.2:
         report["errors"].append(f"{len(failed)} of {len(urls)} CNC pages could not be read; CNC products left unchanged.")
-        plan = []
+        plan = []; additions = []; cnc_healthy = False
+    else:
+        cnc_healthy = len(idx) >= 3000
+
+    # New variants to create: missing sizes, plus offsets CNC lists for a size we have but GT Street doesn't.
+    new_specs = []
+    def spec(p, sz, pc, off, u, pg):
+        st_ = ("out", 0) if pg["out"] else (("backorder", 0) if pg.get("backorder") else ("in", STOCK_QTY))
+        sfx = off.replace("+", "P").replace("-", "M").replace(" ", "")
+        price = round(pg["price"] - PRICE_OFFSET, 2)
+        return {"p": p, "opts": (sz, pc, off), "url": u, "price": price if price > 0 else pg["price"], "state": st_,
+                "sku": f"{pg['sku']}-{sfx}" if pg.get("sku") else ""}
+    combos = {}  # product id -> {(size, pcd): (url, {offsets})}
+    for p, v, url in plan:
+        c = combos.setdefault(p["id"], {}).setdefault((v["opts"].get("Rim Size"), v["opts"].get("PCD")), [url, set(), p])
+        c[1].add(v["opts"].get("Offset"))
+    if ADD_NEW_SIZES:
+        for pid, cs in combos.items():
+            for (sz, pc), (u, offs, p) in cs.items():
+                pg = pages.get(u, {})
+                if not pg.get("ok") or set(p["variants"][0]["opts"]) != {"Rim Size", "PCD", "Offset"}: continue
+                rk = next((x for x in ALIAS.get(norm(p["title"]), [norm(p["title"])]) if x in ranges), None)
+                if len(owner.get(rk, [])) != 1: continue
+                for o in pg["offsets"]:
+                    if o not in offs: new_specs.append(spec(p, sz, pc, o, u, pg))
+        for p, sz, pc, u in additions:
+            pg = pages.get(u, {})
+            if not pg.get("ok"):
+                report.setdefault("new_sizes_skipped", []).append(f"{p['title']} {sz} {pc}: page unreadable today"); continue
+            if not pg["offsets"]:
+                report.setdefault("new_sizes_skipped", []).append(f"{p['title']} {sz} {pc}: CNC lists no offset"); continue
+            for o in pg["offsets"]: new_specs.append(spec(p, sz, pc, o, u, pg))
+    if len(new_specs) > NEW_VARIANT_LIMIT:
+        report["new_variants_deferred"] = len(new_specs) - NEW_VARIANT_LIMIT
+        new_specs = new_specs[:NEW_VARIANT_LIMIT]
+
+    # Discontinued: a variant that carries a CNC stock code (ITM...) but whose size and PCD is no longer on CNC.
+    # Confirmed with CNC's own shop data (search by stock code) before anything is marked.
+    matched_ids = {v["id"] for _, v, _ in plan}
+    disc = []  # (product, variant, name)
+    cands = [(p, v) for p in products for v in p["variants"] if v["id"] not in matched_ids and v["sku"].upper().startswith("ITM")]
+    if cands and cnc_healthy:
+        bases = sorted({v["sku"].split("-")[0].upper() for _, v in cands})
+        def on_cnc(b):
+            st_, t_ = http(f"https://cncwheels.com.au/wp-json/wc/store/v1/products?search={b}")
+            if st_ != 200: return None
+            try: items = json.loads(t_)
+            except Exception: return None
+            return any((x.get("sku") or "").upper() == b for x in items)
+        with cf.ThreadPoolExecutor(CNC_WORKERS) as ex:
+            exists = dict(zip(bases, ex.map(on_cnc, bases)))
+        for p, v in cands:
+            e = exists.get(v["sku"].split("-")[0].upper())
+            name = f"{p['title']} {v['opts'].get('Rim Size')} {v['opts'].get('PCD')} {v['opts'].get('Offset')}"
+            if e is False: disc.append((p, v, name))
+            elif e is True: report.setdefault("disc_not_confirmed", []).append(f"{name}: still on CNC under a different page")
+        if len(disc) > max(20, 0.05 * max(1, len(plan))):
+            report["errors"].append(f"{len(disc)} variants looked discontinued at once; nothing marked (safety limit). Check CNC.")
+            disc = []
+    elif cands:
+        report.setdefault("disc_not_confirmed", []).append(f"{len(cands)} variants not checked for discontinuation: CNC's index looked incomplete today")
 
     sku_set = {}  # variant id -> supplier part number to write
     decisions = []  # (product, variant, display name, source price, source out of stock, offset)
@@ -523,7 +603,25 @@ def main():
         if len(inp) > 1:
             updates.setdefault(p["id"], []).append(inp)
 
-    finish(report, started, stock_targets, updates)
+    # Discontinued variants: out of stock, flagged on the variant (the theme shows "Discontinued"), product tagged
+    # when every variant is gone. A flagged variant that comes back on CNC is unflagged above.
+    disc_ids = set()
+    for p, v, name in disc:
+        disc_ids.add(v["id"])
+        inp = next((x for x in updates.get(p["id"], []) if x["id"] == v["id"]), None)
+        if inp is None:
+            inp = {"id": v["id"]}; updates.setdefault(p["id"], []).append(inp)
+        inp["inventoryPolicy"] = "DENY"; inp.setdefault("inventoryItem", {})["tracked"] = True
+        inp["metafields"] = [{"namespace": "gt", "key": "discontinued", "type": "boolean", "value": "true"}]
+        if v["item"]: stock_targets[v["item"]] = 0
+        if not v.get("disc"):
+            report.setdefault("discontinued", []).append({"variant": name, "id": v["id"], "product": p["title"], "sku": v["sku"],
+                                                          "image": p.get("image", ""), "handle": p.get("handle", "")})
+    unflag = [v["id"] for p in products for v in p["variants"] if v.get("disc") and v["id"] in matched_ids]
+    tag_add = [p["id"] for p in products if p["variants"] and "Discontinued" not in p.get("tags", []) and all(v["id"] in disc_ids or v.get("disc") and v["id"] not in matched_ids for v in p["variants"])]
+    tag_remove = [p["id"] for p in products if "Discontinued" in p.get("tags", []) and any(v["id"] in matched_ids for v in p["variants"])]
+    report["reinstated"] = len(unflag)
+    finish(report, started, stock_targets, updates, new_specs, unflag, tag_add, tag_remove)
 
 BULK_M = """mutation($pid:ID!,$v:[ProductVariantsBulkInput!]!){ productVariantsBulkUpdate(productId:$pid, variants:$v){
   userErrors{field message} } }"""
@@ -572,8 +670,72 @@ def apply_stock(report, targets):
     report["stock_stocked_at_location"] = len(to_activate)
     report["stock_quantities_updated"] = len(to_set)
 
-def finish(report, started, stock_targets, updates):
+CREATE_M = """mutation($pid:ID!,$v:[ProductVariantsBulkInput!]!){ productVariantsBulkCreate(productId:$pid, variants:$v){
+  productVariants{ id selectedOptions{ name value } } userErrors{ field message } } }"""
+OPTS_Q = """query($id:ID!){ product(id:$id){ options{ name optionValues{ name } } } }"""
+REORDER_M = """mutation($pid:ID!,$o:[OptionReorderInput!]!){ productOptionsReorder(productId:$pid, options:$o){ userErrors{ field message } } }"""
+MFDEL_M = """mutation($ids:[MetafieldIdentifierInput!]!){ metafieldsDelete(metafields:$ids){ userErrors{ field message } } }"""
+TAGADD_M = """mutation($id:ID!){ tagsAdd(id:$id, tags:["Discontinued"]){ userErrors{ message } } }"""
+TAGRM_M = """mutation($id:ID!){ tagsRemove(id:$id, tags:["Discontinued"]){ userErrors{ message } } }"""
+
+def _num(x):
+    return [float(t) for t in re.findall(r"-?\d+(?:\.\d+)?", x or "")] or [9e9]
+
+def create_variants(report, specs):
+    """Create missing CNC sizes on the right product, priced and stocked like every other variant, then sort the
+    product's size, PCD and offset values so the new ones sit in order."""
+    if not specs: return
+    loc = gql(LOC_Q)["locations"]["nodes"][0]["id"]
+    by_p = {}
+    for sp in specs: by_p.setdefault(sp["p"]["id"], []).append(sp)
+    for pid, ss in by_p.items():
+        p = ss[0]["p"]
+        for i in range(0, len(ss), 100):
+            chunk = ss[i:i + 100]
+            vin = []
+            for sp in chunk:
+                sz, pc, off = sp["opts"]; st_, q_ = sp["state"]
+                it = {"tracked": True}
+                if sp["sku"]: it["sku"] = sp["sku"]
+                vin.append({"optionValues": [{"optionName": "Rim Size", "name": sz}, {"optionName": "PCD", "name": pc}, {"optionName": "Offset", "name": off}],
+                            "price": f"{sp['price']:.2f}", "inventoryPolicy": "CONTINUE" if st_ == "backorder" else "DENY",
+                            "inventoryItem": it, "inventoryQuantities": [{"availableQuantity": q_, "locationId": loc}]})
+            try:
+                res = gql(CREATE_M, {"pid": pid, "v": vin})["productVariantsBulkCreate"]
+            except Exception as e:
+                report["errors"].append({"new_variants": p["title"], "error": str(e)[:300]}); continue
+            if res["userErrors"]:
+                report["errors"].append({"new_variants": p["title"], "errors": res["userErrors"][:5]})
+            for nv in res.get("productVariants") or []:
+                o = {x["name"]: x["value"] for x in nv["selectedOptions"]}
+                sp = next((x for x in chunk if x["opts"] == (o.get("Rim Size"), o.get("PCD"), o.get("Offset"))), None)
+                if not sp: continue
+                name = f"{p['title']} {' '.join(sp['opts'])}"
+                report.setdefault("new_variants", []).append({"variant": name, "id": nv["id"], "product": p["title"], "price": sp["price"],
+                    "state": sp["state"][0], "url": sp["url"], "image": p.get("image", ""), "handle": p.get("handle", "")})
+                report.setdefault("cnc_applied", []).append({"variant": nv["id"], "url": sp["url"], "name": name, "state": sp["state"][0], "own": False})
+        try:
+            opts = gql(OPTS_Q, {"id": pid})["product"]["options"]
+            order = [{"name": o["name"], "values": [{"name": v["name"]} for v in sorted(o["optionValues"], key=lambda v: _num(v["name"]))]} for o in opts]
+            errs = gql(REORDER_M, {"pid": pid, "o": order})["productOptionsReorder"]["userErrors"]
+            if errs: report["errors"].append({"sort_options": p["title"], "errors": errs[:3]})
+        except Exception as e:
+            report["errors"].append({"sort_options": p["title"], "error": str(e)[:200]})
+
+def finish(report, started, stock_targets, updates, new_specs=(), unflag=(), tag_add=(), tag_remove=()):
+    if new_specs:
+        report["new_variants_planned"] = [f"{sp['p']['title']} {' '.join(sp['opts'])}" for sp in new_specs][:500]
     if not DRY_RUN and os.environ.get("SOURCE", "admin") == "admin":
+        create_variants(report, list(new_specs))
+        for i in range(0, len(unflag), 25):
+            try: gql(MFDEL_M, {"ids": [{"ownerId": x, "namespace": "gt", "key": "discontinued"} for x in unflag[i:i + 25]]})
+            except Exception as e: report["errors"].append({"unflag": str(e)[:200]})
+        for pid in tag_add:
+            try: gql(TAGADD_M, {"id": pid})
+            except Exception as e: report["errors"].append({"tag": str(e)[:200]})
+        for pid in tag_remove:
+            try: gql(TAGRM_M, {"id": pid})
+            except Exception as e: report["errors"].append({"untag": str(e)[:200]})
         for pid, vs in updates.items():
             for i in range(0, len(vs), 100):
                 try:

@@ -74,6 +74,8 @@ else:
     r["price_changes"] = [c for c in pc.values() if abs(float(c["to"]) - float(c["from"])) >= 0.01]
     r["stock_changes"] = [c for c in sc.values() if not c.get("prev") or c.get("prev") != c.get("state")]
     r["big_drops"] = [c for c in r["price_changes"] if float(c["from"]) > 0 and float(c["to"]) < float(c["from"]) * 0.8]
+    r["new_variants"] = [c for x in good for c in x["r"].get("new_variants", [])]
+    r["discontinued"] = [c for x in good for c in x["r"].get("discontinued", [])]
     r["errors"] = [f"{x['label']}: " + (e if isinstance(e, str) else json.dumps(e)) for x in good for e in x["r"].get("errors", [])]
     if any(x["conc"] not in ("success", "") for x in runs): status = "failure"
     elif status == "unknown": status = "success"
@@ -184,7 +186,7 @@ else:
     restocked = sum(1 for s in sc if s.get("state", "in" if s["now"] == "In stock" else "") == "in")
     ok = status == "success" and not vfail and not errs
     attention = bool(held or errs or vfail)
-    n = len(ch) + len(sc)
+    n = len(ch) + len(sc) + len(r.get("new_variants", [])) + len(r.get("discontinued", []))
     subject = f"Daily Digest: Stock and Pricing - {n} change{'s' if n != 1 else ''}"
     headline = "All checks passed" if ok and not held else ("Applied, a few items need you" if ok else "Needs attention")
     inner = []
@@ -253,6 +255,19 @@ else:
         rows = [item_row(s, st_pill(s)) for s in g[:80]]
         n_bo = sum(1 for s in sc if s.get("state") == "backorder"); n_low = sum(1 for s in sc if s.get("state") == "low")
         inner.append(section("Stock changes", f"{sold} sold out, {restocked} back in stock, {n_low} low stock, {n_bo} now on back order (still orderable). Copied from each supplier's own page.", rows))
+
+    nv = r.get("new_variants", [])
+    if nv:
+        g = group(nv, lambda c: ())
+        rows = [item_row(c, f'from <b>{money(min(x["price"] for x in nv if x["product"] == c["product"]))}</b>') for c in g[:60]]
+        more = f" {r.get('new_variants_deferred')} more are queued for the next check." if r.get("new_variants_deferred") else ""
+        inner.append(section("New sizes added", f"{len(nv)} size{'s' if len(nv) != 1 else ''} CNC sells that the site did not list, now added with CNC's price less $1 and their stock.{more}", rows))
+    dc = r.get("discontinued", [])
+    if dc:
+        g = group(dc, lambda c: ())
+        rows = [item_row(c, pill("Discontinued", RED)) for c in g[:60]]
+        inner.append(section("Discontinued at CNC", f"{len(dc)} size{'s' if len(dc) != 1 else ''} no longer sold by CNC (confirmed against CNC's own shop data).", rows,
+                             "Marked Discontinued on the site and set to out of stock. Remove them manually if you no longer want them listed."))
 
     # 3. Supplier check summary.
     srows = [f'<tr><td style="padding:9px 0;border-bottom:1px solid {LINE};font-size:14px;font-weight:600">CNC Wheels</td>'
