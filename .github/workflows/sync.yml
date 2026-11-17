@@ -1,6 +1,6 @@
 name: Supplier price and stock sync
 
-# One live run every day at 2am Sydney: every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
+# One live run every second day at 2am Sydney: every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
 # is read live from its own website, nothing cached, and the results are applied to Shopify. Then an independent
 # re-check, and an email to sales@gtstreet.au with every price and stock change.
 on:
@@ -28,12 +28,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
-      - name: Only run at 2am Sydney time
+      - name: Only run at 2am Sydney, every second day
         id: gate
         run: |
           H=$(TZ=Australia/Sydney date +%H)
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$H" != "02" ]; then
-            echo "Not 2am in Sydney (daylight saving switch); skipping this trigger."; echo "go=false" >> "$GITHUB_OUTPUT"
+          # Every second day: runs when the Sydney date's day number is even (e.g. 18, 20, 22 Nov 2026), so it
+          # alternates correctly across month ends instead of resetting on the 1st.
+          DAY=$(( $(date -u -d "$(TZ=Australia/Sydney date +%F)" +%s) / 86400 % 2 ))
+          if [ "${{ github.event_name }}" = "schedule" ] && { [ "$H" != "02" ] || [ "$DAY" != "0" ]; }; then
+            echo "Not a run time (2am Sydney, every second day); skipping this trigger."; echo "go=false" >> "$GITHUB_OUTPUT"
           else echo "go=true" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
         if: steps.gate.outputs.go == 'true'
