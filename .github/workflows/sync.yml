@@ -31,9 +31,15 @@ jobs:
       - name: Only run at 2am or 2pm Sydney time
         id: gate
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(TZ=Australia/Sydney date +%H)" != "02" ] && [ "$(TZ=Australia/Sydney date +%H)" != "14" ]; then
+          H=$(TZ=Australia/Sydney date +%H)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$H" != "02" ] && [ "$H" != "14" ]; then
             echo "Not 2am or 2pm in Sydney (daylight saving switch); skipping this trigger."; echo "go=false" >> "$GITHUB_OUTPUT"
           else echo "go=true" >> "$GITHUB_OUTPUT"; fi
+          # 2am: full run including CNC (about 80 to 120 minutes). 2pm: quick run of the Shopify-platform
+          # suppliers only (about 5 minutes), to stay within GitHub's included Actions minutes.
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$H" = "14" ]; then
+            echo "only=suppliers" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
         if: steps.gate.outputs.go == 'true'
       - uses: actions/setup-python@v5
@@ -60,7 +66,7 @@ jobs:
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           MAX_DROP: ${{ vars.MAX_DROP || '1' }}
           JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
-          ONLY: ${{ inputs.only || '' }}
+          ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
         run: python3 sync.py
       - name: Save CNC page cache
         if: steps.gate.outputs.go == 'true' && (always() && hashFiles('cnc_cache.json') != '')
@@ -81,7 +87,7 @@ jobs:
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           MAX_DROP: ${{ vars.MAX_DROP || '1' }}
           JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
-          ONLY: ${{ inputs.only || '' }}
+          ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
         run: python3 channels.py
       - name: Summary
         if: steps.gate.outputs.go == 'true' && (always())

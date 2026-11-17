@@ -31,7 +31,7 @@ Credentials (GitHub Actions secrets, never in code):
   SHOPIFY_ADMIN_TOKEN    Admin API access token (shpat_...), or instead:
   SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET  for apps that use the client credentials grant.
 """
-import os, re, json, time, gzip, html, sys, datetime, concurrent.futures as cf
+import uuid, os, re, json, time, gzip, html, sys, datetime, concurrent.futures as cf
 import urllib.request, urllib.error, urllib.parse
 from norm import norm
 
@@ -41,6 +41,12 @@ DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 PRICE_OFFSET = float(os.environ.get("PRICE_OFFSET", "1"))
 MIN_PRICE = float(os.environ.get("MIN_PRICE", "10"))
 CNC_SET_SKU = os.environ.get("CNC_SET_SKU", "1") == "1"
+# Stock model: every synced variant is tracked in Shopify. Out of stock at the supplier = 0 available (Sold out).
+# In stock at the supplier = STOCK_QTY available. Suppliers publish availability, not counts, so STOCK_QTY is a
+# stand-in meaning "available from the supplier". Products tagged OWN_STOCK_TAG hold GT Street's own counted stock
+# and are never given supplier quantities.
+STOCK_QTY = int(os.environ.get("STOCK_QTY", "20"))
+OWN_STOCK_TAG = os.environ.get("OWN_STOCK_TAG", "own-stock").lower()
 MAX_DROP = float(os.environ.get("MAX_DROP", "1"))  # 1 = apply every drop; e.g. 0.30 holds drops over 30% for review
 CNC_DELAY = float(os.environ.get("CNC_DELAY", "0.8"))
 CNC_WORKERS = int(os.environ.get("CNC_WORKERS", "2"))
@@ -137,7 +143,7 @@ def gql(query, variables=None):
 PRODUCTS_Q = """
 query($cursor:String,$q:String!){ products(first:50, after:$cursor, query:$q){
   pageInfo{hasNextPage endCursor}
-  nodes{ id title handle vendor status
+  nodes{ id title handle vendor status tags
     variants(first:250){ pageInfo{hasNextPage endCursor} nodes{ id sku price inventoryPolicy selectedOptions{name value}
       inventoryItem{ id tracked } } } } } }"""
 MORE_VARIANTS_Q = """
@@ -154,7 +160,7 @@ def shopify_products(search=None):
             while vinfo["hasNextPage"]:
                 more = gql(MORE_VARIANTS_Q, {"id": p["id"], "cursor": vinfo["endCursor"]})["product"]["variants"]
                 vs += more["nodes"]; vinfo = more["pageInfo"]
-            out.append({"id": p["id"], "title": p["title"], "handle": p["handle"], "status": p["status"], "variants": [
+            out.append({"id": p["id"], "title": p["title"], "handle": p["handle"], "status": p["status"], "tags": p.get("tags", []), "variants": [
                 {"id": v["id"], "sku": (v.get("sku") or "").strip(), "price": float(v["price"]), "policy": v["inventoryPolicy"],
                  "tracked": v["inventoryItem"]["tracked"], "item": v["inventoryItem"]["id"],
                  "opts": {o["name"]: o["value"] for o in v["selectedOptions"]}} for v in vs]})
@@ -279,7 +285,7 @@ def load_suppliers():
     out = []
     for c in cfg:
         on = os.environ.get(c["id"].upper().replace("-", "_"), "1" if c.get("enabled", True) else "0") == "1"
-        if only: on = c["id"].lower() in only
+        if only and only != {"suppliers"}: on = c["id"].lower() in only  # "suppliers" = every enabled supplier, no CNC
         if on: out.append(c)
     return out
 
@@ -399,7 +405,7 @@ def main():
                 decisions.append((p, v, f"{p['title']} ({name_} {hit[2] or hit[3]})", hit[0], src_out, offset, floor))
 
     updates = {}  # product id -> list of variant inputs
-    to_zero = []  # inventory item ids that become sold out
+    stock_targets = {}  # inventory item id -> available quantity to hold at the store location
     for p, v, name, src_price, src_out, offset, floor in decisions:
         inp = {"id": v["id"]}
         new_price = round(src_price - offset, 2)
@@ -409,32 +415,67 @@ def main():
             else:
                 inp["price"] = f"{new_price:.2f}"
                 report["price_changes"].append({"variant": name, "from": v["price"], "to": new_price})
-        if src_out is None:
-            pass
-        elif src_out:
+        own = OWN_STOCK_TAG in [t.lower() for t in p.get("tags", [])]
+        if src_out is not None and not own and v["item"]:
             if v["tracked"] is not True or v["policy"] != "DENY":
                 inp["inventoryPolicy"] = "DENY"; inp["inventoryItem"] = {"tracked": True}
-                report["sold_out"].append(name)
-            if v["item"]: to_zero.append(v["item"])
-        else:
-            if v["tracked"] is True:
-                inp["inventoryItem"] = {"tracked": False}
-                report["back_in_stock"].append(name)
+            stock_targets[v["item"]] = 0 if src_out else STOCK_QTY
+            (report["sold_out"] if src_out else report["back_in_stock"]).append(name)
         if v["id"] in sku_set:
             inp.setdefault("inventoryItem", {})["sku"] = sku_set[v["id"]]
         if len(inp) > 1:
             updates.setdefault(p["id"], []).append(inp)
 
-    finish(report, started, to_zero, updates)
+    finish(report, started, stock_targets, updates)
 
 BULK_M = """mutation($pid:ID!,$v:[ProductVariantsBulkInput!]!){ productVariantsBulkUpdate(productId:$pid, variants:$v){
   userErrors{field message} } }"""
-QTY_M = """mutation($input:InventorySetQuantitiesInput!){ inventorySetQuantities(input:$input){ userErrors{field message} } }"""
+# Shopify API 2026-04+ requires an idempotency key on inventory mutations.
+QTY_M = """mutation($input:InventorySetQuantitiesInput!,$key:String!){ inventorySetQuantities(input:$input) @idempotent(key:$key){
+  userErrors{field message} } }"""
 LOC_Q = "{ locations(first:1, query:\"active:true\"){ nodes{ id } } }"
 META_M = """mutation($m:[MetafieldsSetInput!]!){ metafieldsSet(metafields:$m){ userErrors{field message} } }"""
 SHOP_Q = "{ shop { id } }"
 
-def finish(report, started, to_zero, updates):
+LEVELS_Q = """query($ids:[ID!]!,$loc:ID!){ nodes(ids:$ids){ ... on InventoryItem { id
+  inventoryLevel(locationId:$loc){ quantities(names:["available"]){ quantity } } } } }"""
+
+def apply_stock(report, targets):
+    """Bring every synced variant's available quantity to its target, stocking it at the location first if needed
+    (this is what clears "Inventory not stocked" in the admin)."""
+    loc = gql(LOC_Q)["locations"]["nodes"][0]["id"]
+    items = list(targets)
+    to_set, to_activate = [], []
+    for i in range(0, len(items), 100):
+        for n in gql(LEVELS_Q, {"ids": items[i:i + 100], "loc": loc})["nodes"]:
+            if not n: continue
+            lvl = n.get("inventoryLevel")
+            if lvl is None:
+                to_activate.append(n["id"])
+            else:
+                have = lvl["quantities"][0]["quantity"] if lvl["quantities"] else None
+                if have != targets[n["id"]]: to_set.append(n["id"])
+    for i in range(0, len(to_activate), 25):
+        chunk = to_activate[i:i + 25]
+        body = " ".join(f'a{k}: inventoryActivate(inventoryItemId: "{it}", locationId: "{loc}", available: {targets[it]}) @idempotent(key: "{uuid.uuid4()}") {{ userErrors {{ message }} }}'
+                        for k, it in enumerate(chunk))
+        try:
+            r = gql("mutation { " + body + " }")
+            errs = [e for k in range(len(chunk)) for e in (r.get(f"a{k}") or {}).get("userErrors", [])]
+            if errs: report["errors"].append({"activate": errs[:5]})
+        except Exception as e:
+            report["errors"].append({"activate": str(e)[:300]})
+    for i in range(0, len(to_set), 100):
+        q = [{"inventoryItemId": it, "locationId": loc, "quantity": targets[it], "changeFromQuantity": None} for it in to_set[i:i + 100]]
+        try:
+            errs = gql(QTY_M, {"input": {"name": "available", "reason": "correction", "quantities": q}, "key": str(uuid.uuid4())})["inventorySetQuantities"]["userErrors"]
+            if errs: report["errors"].append({"inventory": errs[:5]})
+        except Exception as e:
+            report["errors"].append({"inventory": str(e)[:300]})
+    report["stock_stocked_at_location"] = len(to_activate)
+    report["stock_quantities_updated"] = len(to_set)
+
+def finish(report, started, stock_targets, updates):
     if not DRY_RUN and os.environ.get("SOURCE", "admin") == "admin":
         for pid, vs in updates.items():
             for i in range(0, len(vs), 100):
@@ -443,15 +484,8 @@ def finish(report, started, to_zero, updates):
                     if errs: report["errors"].append({"product": pid, "errors": errs})
                 except Exception as e:
                     report["errors"].append({"product": pid, "error": str(e)})
-        if to_zero:
-            loc = gql(LOC_Q)["locations"]["nodes"][0]["id"]
-            for i in range(0, len(to_zero), 100):
-                q = [{"inventoryItemId": it, "locationId": loc, "quantity": 0, "changeFromQuantity": None} for it in to_zero[i:i + 100]]
-                try:
-                    errs = gql(QTY_M, {"input": {"name": "available", "reason": "correction", "quantities": q}})["inventorySetQuantities"]["userErrors"]
-                    if errs: report["errors"].append({"inventory": errs[:5]})
-                except Exception as e:
-                    report["errors"].append({"inventory": str(e)})
+        if stock_targets:
+            apply_stock(report, stock_targets)
         shop = gql(SHOP_Q)["shop"]["id"]
         gql(META_M, {"m": [{"ownerId": shop, "namespace": "gt_sync", "key": "last_run", "type": "date_time",
                             "value": started.replace(microsecond=0).isoformat()}]})
@@ -463,8 +497,9 @@ def finish(report, started, to_zero, updates):
           f"- CNC pages checked: {report.get('cnc_pages_read', 0)} (unchanged since last run, reused: {report.get('cnc_pages_from_cache', 0)}; failed: {report.get('cnc_pages_failed', 0)})",
           f"- Price changes: {len(report['price_changes'])}",
           f"- Held for review (under ${MIN_PRICE:.0f} or over the drop limit): {len(report['held'])}",
-          f"- Newly sold out: {len(report['sold_out'])}",
-          f"- Back in stock: {len(report['back_in_stock'])}",
+          f"- Sold out at the supplier: {len(report['sold_out'])}",
+          f"- In stock at the supplier: {len(report['back_in_stock'])}",
+          f"- Stock quantities changed: {report.get('stock_quantities_updated', 0)}; newly stocked at the location: {report.get('stock_stocked_at_location', 0)}",
           f"- Products not on CNC (left alone): {len(report['unmatched_products'])}",
           f"- Variants with no CNC page for that size and PCD (left alone): {len(report['unmatched_variants'])}",
           f"- Offsets CNC does not list (reported only): {len(report['missing_offsets'])}",
