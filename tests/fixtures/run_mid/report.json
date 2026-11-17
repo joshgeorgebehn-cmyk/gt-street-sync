@@ -1,0 +1,75 @@
+{
+ "started": "2026-11-17T01:17:00+00:00",
+ "dry_run": false,
+ "products": 3120,
+ "cnc_pages_read": 1840,
+ "cnc_pages_failed": 0,
+ "held": [],
+ "errors": [],
+ "cnc_skipped_pages": [],
+ "complete": true,
+ "only": "",
+ "suppliers": {
+  "XForce": {
+   "products": 310,
+   "variants_matched": 903,
+   "unmatched": [],
+   "error": null
+  },
+  "BC Racing": {
+   "products": 1686,
+   "variants_matched": 6535,
+   "unmatched": [
+    "BC BR Series Test (no SKU)"
+   ],
+   "error": null
+  }
+ },
+ "run_id": "111",
+ "finished": "2026-11-17T04:01:00+00:00",
+ "price_changes": [
+  {
+   "variant": "GT Form Venom Silver (19x9.5 5x112 +40)",
+   "id": "gid://shopify/ProductVariant/1",
+   "product": "GT Form Venom Silver",
+   "from": 500,
+   "to": 480,
+   "image": "https://cdn.shopify.com/s/files/1/0787/6739/0946/files/ALLOY_WHEELS_GT_FORM_VENOM_SILVER_MACHINED_FACE_RIMS_19_20_INCH_MAGS_1.webp?v=1777684373",
+   "handle": "gt-form-venom-silver-machined-face"
+  },
+  {
+   "variant": "JSR <Tokyo> & \"Drift\" Wheel (18x8.5 5x114.3 +35)",
+   "id": "gid://shopify/ProductVariant/2",
+   "product": "JSR <Tokyo> & \"Drift\" Wheel",
+   "from": 400,
+   "to": 300,
+   "image": "",
+   "handle": "jsr-tokyo"
+  }
+ ],
+ "stock_changes": [
+  {
+   "variant": "GT Form Venom Silver (19x9.5 5x112 +40)",
+   "id": "gid://shopify/ProductVariant/1",
+   "prev": "in",
+   "state": "low",
+   "now": "Low stock (3 left)",
+   "product": "GT Form Venom Silver",
+   "image": "https://cdn.shopify.com/s/files/1/0787/6739/0946/files/ALLOY_WHEELS_GT_FORM_VENOM_SILVER_MACHINED_FACE_RIMS_19_20_INCH_MAGS_1.webp?v=1777684373",
+   "handle": "gt-form-venom-silver-machined-face"
+  }
+ ],
+ "new_variants": [
+  {
+   "variant": "Black Rock Cobra (16x8 6x139.7 +25)",
+   "id": "gid://shopify/ProductVariant/9",
+   "product": "Black Rock Cobra",
+   "price": 299,
+   "state": "in",
+   "url": "https://cncwheels.com.au/x",
+   "image": "https://cdn.shopify.com/s/files/1/0787/6739/0946/files/ALLOY_WHEELS_GT_FORM_VENOM_SILVER_MACHINED_FACE_RIMS_19_20_INCH_MAGS_1.webp?v=1777684373",
+   "handle": "black-rock-cobra"
+  }
+ ],
+ "discontinued": []
+}

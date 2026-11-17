@@ -2,14 +2,16 @@ name: Supplier price and stock sync
 
 # 1am and 12pm Sydney every day: each full run covers every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
 # is read live from its own website, nothing cached, and the results are applied to Shopify. Then an independent
-# recheck of every amended product. The 7am Daily digest email summarises the last two runs.
+# recheck of every amended product. Nothing is emailed from here: the 7am Daily digest covers every run, manual ones included.
 on:
   schedule:
-    # GitHub schedules in UTC: one entry for daylight time, one for standard time. The first step keeps only 2am Sydney.
-    - cron: "0 14 * * *"   # 1am AEDT
-    - cron: "0 15 * * *"   # 1am AEST
-    - cron: "0 1 * * *"    # 12pm AEDT
-    - cron: "0 2 * * *"    # 12pm AEST
+    # GitHub schedules in UTC: one entry for daylight time, one for standard time. digest.py gate keeps the one whose
+    # due time is 1am or 12pm in Sydney (judged on the due time, so a late start by GitHub still runs). :17 past avoids
+    # the top of the hour, when GitHub is busiest and most likely to drop scheduled runs.
+    - cron: "17 14 * * *"   # 1:17am AEDT
+    - cron: "17 15 * * *"   # 1:17am AEST
+    - cron: "17 1 * * *"    # 12:17pm AEDT
+    - cron: "17 2 * * *"    # 12:17pm AEST
   workflow_dispatch:
     inputs:
       only:
@@ -21,30 +23,34 @@ permissions:
   contents: read
   issues: write
 
-concurrency:
-  group: cnc-sync
-  cancel-in-progress: false
-
 jobs:
-  sync:
+  # Separate job so the other-season duplicate cron ends here and never queues behind (or cancels) a real check.
+  gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.gate.outputs.go }}
     steps:
+      - uses: actions/checkout@v4
       - name: "1am and 12pm Sydney every day, every supplier"
         id: gate
-        run: |
-          H=$(TZ=Australia/Sydney date +%H)
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$H" != "01" ] && [ "$H" != "12" ]; then
-            echo "Not 1am or 12pm in Sydney (daylight saving switch); skipping this trigger."; echo "go=false" >> "$GITHUB_OUTPUT"
-          else echo "go=true" >> "$GITHUB_OUTPUT"; fi
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: python3 digest.py gate "${{ github.event.schedule }}" 1 12 | tee -a "$GITHUB_OUTPUT"
+  sync:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    concurrency:
+      group: cnc-sync
+      cancel-in-progress: false
+    steps:
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.go == 'true'
       - uses: actions/setup-python@v5
-        if: steps.gate.outputs.go == 'true'
         with:
           python-version: "3.12"
       - name: Read every supplier website live and apply prices and stock
-        if: steps.gate.outputs.go == 'true'
         env:
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
@@ -54,10 +60,10 @@ jobs:
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
-          ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
+          ONLY: ${{ inputs.only || '' }}
         run: python3 sync.py
       - name: Sales channel coverage
-        if: steps.gate.outputs.go == 'true' && always()
+        if: always()
         env:
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
@@ -67,10 +73,10 @@ jobs:
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
-          ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
+          ONLY: ${{ inputs.only || '' }}
         run: python3 channels.py
       - name: Description upkeep
-        if: steps.gate.outputs.go == 'true' && always()
+        if: always()
         env:
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
@@ -80,10 +86,10 @@ jobs:
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
-          ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
+          ONLY: ${{ inputs.only || '' }}
         run: python3 maintenance.py
       - name: Independent re-check against supplier websites
-        if: steps.gate.outputs.go == 'true' && (success() || failure())
+        if: (success() || failure())
         env:
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
@@ -93,40 +99,22 @@ jobs:
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
-          ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
+          ONLY: ${{ inputs.only || '' }}
         run: python3 verify.py
-      - name: Email (manual runs only; scheduled runs are emailed at 7:30am by the Daily digest workflow)
-        if: steps.gate.outputs.go == 'true' && always() && github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO_OWNER: ${{ github.repository_owner }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          JOB_STATUS: ${{ job.status }}
-          EMAIL_TO: ${{ vars.EMAIL_TO || 'joshua.b@gtstreet.au,will.k@gtstreet.au,billy@breadenmedia.com.au' }}
-          MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
-          MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
-          MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
-          MS_SENDER: ${{ vars.MS_SENDER || 'joshua.b@gtstreet.au' }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-        run: python3 notify.py
       - name: Summary
-        if: steps.gate.outputs.go == 'true' && always()
+        if: always()
         run: |
           test -f report.md && cat report.md >> "$GITHUB_STEP_SUMMARY" || echo "No sync report" >> "$GITHUB_STEP_SUMMARY"
           for f in verify.md channels.md maintenance.md; do test -f $f && cat $f >> "$GITHUB_STEP_SUMMARY" || true; done
       - uses: actions/upload-artifact@v4
-        if: steps.gate.outputs.go == 'true' && always()
+        if: always()
         with:
           name: sync-report
           path: |
             report.md
             report.json
             verify.md
+            verify.json
             channels.md
             maintenance.md
-            price_changes.csv
-            email.html
           retention-days: 60

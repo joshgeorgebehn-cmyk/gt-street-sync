@@ -42,3 +42,48 @@ in `suppliers.json`:
 
 Current: XForce, BC Racing and Alu-Cab on; Just Jap off. To test one supplier quickly, run the workflow with
 `only` set to its id (e.g. `xforce`); CNC is skipped unless `cnc` is listed.
+
+## Daily digest email
+
+One email a day, about 7am Sydney, to `EMAIL_TO`. It covers **yesterday's 12pm check and today's 1am check**, plus any
+manual runs started in between (labelled "manual").
+
+**Flow.** `sync.yml` runs `sync.py` then `verify.py`; each run uploads a `sync-report` artifact (report.json, verify.json,
+verify.md, report.md, channels.md, maintenance.md; kept 60 days). `email.yml` runs `digest.py collect`, which finds the two
+expected scheduled runs by their Sydney start time, waits up to 60 minutes for one still running, downloads each artifact
+and writes `manifest.json`. `notify.py` reads only that manifest (`DIGEST_MANIFEST`), validates every report, merges them,
+and sends. There is no other input and no fallback to a stray report.json.
+
+**Schedule and daylight saving.** Each local time has an AEDT and an AEST cron. `digest.py gate` judges the Sydney time the
+cron was *due*, not when GitHub started it, so exactly one fires each day (tested for every day of a year, including the
+switch days) and a late start still runs. The gate is its own small job, so ignored crons never queue behind a real run.
+Checks run at 1:17am and 12:17pm, off the hour when GitHub drops the most scheduled runs.
+
+**No duplicates, automatic retry.** The digest tries at about 7:07, 7:37 and 8:07 or 8:37. The first attempt whose email is
+accepted uploads a `digest-sent-YYYY-MM-DD` artifact; later attempts see it and stop. A failed send records nothing, so
+the next attempt retries.
+
+**What the email says.** Each expected check is shown as passed, failed, still running, missing, or with an unusable report
+(missing, corrupted, incomplete, from another run, dry run, malformed prices). A check without a usable report is never
+counted as zero changes. A variant changed in both checks shows once, from its first price to its last (stock likewise).
+Missing or failed independent rechecks, mismatches, errors and held prices are "Need you" items.
+
+**Delivery.** Microsoft 365 first, then SMTP, with `price_changes.csv` attached. Throttling, server errors and timeouts are
+retried with backoff; bad credentials or permissions are not. If both fail, one GitHub issue per day is opened (or commented
+on) with label `sync-attention`, and the job goes red. Issues are never closed automatically. `delivery.json` (in the
+`digest-<run>` artifact and the job summary) records sign-in, acceptance and any error. "Accepted" means the mail server
+took it; inbox delivery cannot be confirmed from here.
+
+**Manual use (Actions, Daily digest email, Run workflow).** `mode: preview` builds the email and attaches `email.html`
+without sending. `resend: true` sends even if today's has gone. The **Send test email** workflow sends a sample digest built
+from `tests/fixtures`; it never touches Shopify.
+
+**Settings.**
+- Secrets: `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET` (expires; renew in Entra before it does). Optional SMTP:
+  `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`.
+- Variables (optional): `EMAIL_TO` (default joshua.b@gtstreet.au, will.k@gtstreet.au, billy@breadenmedia.com.au),
+  `MS_SENDER` (default joshua.b@gtstreet.au; must be a real licensed mailbox).
+- Entra app: Microsoft Graph **Mail.Send, Application** permission, with **admin consent granted**.
+- Workflow permissions are set in the YAML: digest `contents: read, actions: read, issues: write`.
+
+**Tests.** `python3 -m unittest discover -s tests -v` (41 tests, all external services mocked).

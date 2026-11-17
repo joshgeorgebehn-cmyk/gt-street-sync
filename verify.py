@@ -118,6 +118,10 @@ def main():
     out = "\n".join(lines) + "\n"
     print(out)
     open("verify.md", "w").write(out)
+    # Structured result for the daily digest (verify.md stays for people).
+    json.dump({"ran": True, "run_id": os.environ.get("GITHUB_RUN_ID", ""), "rechecked": checked, "amended": len(amended),
+               "sampled": max(0, len(ids) - len(amended)), "unreadable": unreadable, "mismatches": bad[:500]},
+              open("verify.json", "w"), indent=1)
     if bad:
         sys.exit(1)
 

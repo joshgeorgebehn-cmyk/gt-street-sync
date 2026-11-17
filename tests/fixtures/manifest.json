@@ -1,0 +1,27 @@
+{
+ "digest_date": "2026-11-18",
+ "digest_label": "Wed 18 Nov 2026",
+ "runs_url": "https://github.com/joshgeorgebehn-cmyk/gt-street-sync/actions/workflows/sync.yml",
+ "checks": [
+  {
+   "label": "12pm check Tue 17 Nov",
+   "expected": true,
+   "run_id": 111,
+   "url": "https://github.com/joshgeorgebehn-cmyk/gt-street-sync/actions/runs/111",
+   "state": "done",
+   "conclusion": "success",
+   "created": "2026-11-17T01:17:00Z",
+   "dir": "run_mid"
+  },
+  {
+   "label": "1am check Wed 18 Nov",
+   "expected": true,
+   "run_id": 222,
+   "url": "https://github.com/joshgeorgebehn-cmyk/gt-street-sync/actions/runs/222",
+   "state": "done",
+   "conclusion": "success",
+   "created": "2026-11-17T14:17:00Z",
+   "dir": "run_am"
+  }
+ ]
+}

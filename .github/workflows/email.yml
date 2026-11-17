@@ -1,12 +1,30 @@
 name: Daily digest email
 
-# 7am Sydney every day: one email to Joshua, Will and Billy summarising both checks since the last email
-# (yesterday's 12pm run and this morning's 1am run). If a check is still running at 7am, it waits up to an hour for it. Missing runs are reported in the email.
+# One email a day, about 7am Sydney, to EMAIL_TO (default Joshua, Will and Billy), covering yesterday's 12pm check and
+# this morning's 1am check, plus any manual runs in between. How it stays reliable:
+#   - Two crons per attempt (AEDT and AEST). digest.py gate looks at the Sydney time each cron was *due*, so exactly one
+#     fires per attempt on every day of the year, and a late start by GitHub is never skipped.
+#   - Three attempts: about 7:07, 7:37 and 8:07 (or 8:37) Sydney. The first that sends records a "digest-sent-DATE"
+#     artifact; later attempts see it and stop. A failed send records nothing, so the next attempt retries.
+#   - If a check is still running it waits up to 60 minutes for that check only.
+#   - The job goes red if the email is not accepted by Microsoft 365 or SMTP (a GitHub issue is opened as a backup).
 on:
   schedule:
-    - cron: "0 20 * * *"   # 7am AEDT
-    - cron: "0 21 * * *"   # 7am AEST
+    - cron: "7 20 * * *"    # 7:07 AEDT  (6:07 AEST, ignored)
+    - cron: "7 21 * * *"    # 7:07 AEST  (8:07 AEDT, retry)
+    - cron: "37 21 * * *"   # 7:37 AEST  (8:37 AEDT, retry)
+    - cron: "37 22 * * *"   # 8:37 AEST, retry  (9:37 AEDT, ignored)
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "live = send the real digest. preview = build it and attach email.html to the run, send nothing."
+        type: choice
+        options: [live, preview]
+        default: live
+      resend:
+        description: "Send even if today's digest has already gone out"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -14,63 +32,86 @@ permissions:
   issues: write
 
 jobs:
-  digest:
+  # Ignored crons end in this short job, so they never queue behind or displace a real attempt.
+  gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 80
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.gate.outputs.go }}
     steps:
-      - name: Only at 7am Sydney
-        id: gate
-        run: |
-          H=$(TZ=Australia/Sydney date +%H)
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$H" != "07" ]; then echo "go=false" >> "$GITHUB_OUTPUT"; else echo "go=true" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.go == 'true'
+      - name: Is this a 7am or 8am Sydney attempt?
+        id: gate
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: python3 digest.py gate "${{ github.event.schedule }}" 7 8 | tee -a "$GITHUB_OUTPUT"
+  digest:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: daily-digest
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        if: steps.gate.outputs.go == 'true'
         with:
           python-version: "3.12"
-      - name: Wait for a check that is still running (up to 60 minutes)
-        if: steps.gate.outputs.go == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: "1. Has today's digest already gone?"
+        id: gate
         run: |
-          for i in $(seq 1 60); do
-            N=$(gh run list --workflow sync.yml --status in_progress --json databaseId --jq 'length')
-            [ "$N" = "0" ] && break
-            echo "A check is still running; waiting ($i min)"; sleep 60
-          done
-      - name: Fetch the sync results from the last 24 hours
-        id: latest
-        if: steps.gate.outputs.go == 'true'
+          DAY=$(TZ=Australia/Sydney date +%F); echo "day=$DAY" >> "$GITHUB_OUTPUT"
+          python3 digest.py sent "$DAY" | tee -a "$GITHUB_OUTPUT"
+      - name: "2. Collect the expected checks (waits up to 60 minutes for one still running)"
+        id: collect
+        if: steps.gate.outputs.sent != 'true' || inputs.resend || inputs.mode == 'preview'
+        run: python3 digest.py collect
+      - name: "3. Build and send the digest"
+        id: send
+        if: steps.collect.outcome == 'success'
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh run list --workflow sync.yml --limit 20 --json databaseId,conclusion,status,createdAt,event > runs.json
-          python3 - <<'PY' > picked.txt
-          import json, datetime
-          now = datetime.datetime.now(datetime.timezone.utc)
-          runs = [r for r in json.load(open("runs.json")) if r["status"] == "completed" and r["conclusion"] not in ("skipped", "cancelled")
-                  and (now - datetime.datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00"))).total_seconds() < 24 * 3600]
-          for r in reversed(runs[:2]):  # oldest first
-              print(r["databaseId"], r["conclusion"], r["createdAt"])
-          PY
-          cat picked.txt
-          DIRS=""; STAT="success"; URLS=""
-          while read ID CONC CREATED; do
-            if gh run download "$ID" -n sync-report -D "run_$ID"; then DIRS="$DIRS run_$ID|$CONC|$CREATED|${{ github.server_url }}/${{ github.repository }}/actions/runs/$ID"; fi
-          done < picked.txt
-          echo "dirs=$DIRS" >> "$GITHUB_OUTPUT"
-      - name: Send the digest
-        if: steps.gate.outputs.go == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
+          DIGEST_MANIFEST: manifest.json
+          DIGEST_MODE: ${{ inputs.mode || 'live' }}
           REPO_OWNER: ${{ github.repository_owner }}
-          REPORT_DIRS: ${{ steps.latest.outputs.dirs }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/sync.yml
-          JOB_STATUS: success
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           EMAIL_TO: ${{ vars.EMAIL_TO || 'joshua.b@gtstreet.au,will.k@gtstreet.au,billy@breadenmedia.com.au' }}
           MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
           MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
           MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
           MS_SENDER: ${{ vars.MS_SENDER || 'joshua.b@gtstreet.au' }}
-        run: python3 notify.py
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+        run: |
+          python3 notify.py && echo "sent=true" >> "$GITHUB_OUTPUT"
+      - name: "4. Record that today's digest was sent (stops duplicates)"
+        if: steps.send.outputs.sent == 'true' && (inputs.mode || 'live') == 'live'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-sent-${{ steps.gate.outputs.day }}
+          path: delivery.json
+          retention-days: 7
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.gate.outputs.sent }}" = "true" ] && [ "${{ steps.collect.outcome }}" = "skipped" ]; then echo "Today's digest was already sent; nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Collect: ${{ steps.collect.outcome }} · Send: ${{ steps.send.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+            test -f delivery.json && { echo '```json'; cat delivery.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY" || true
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.collect.outcome != 'skipped'
+        with:
+          name: digest-${{ github.run_id }}
+          path: |
+            manifest.json
+            email.html
+            price_changes.csv
+            delivery.json
+          retention-days: 30
+          if-no-files-found: ignore

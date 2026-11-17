@@ -753,6 +753,9 @@ def finish(report, started, stock_targets, updates, new_specs=(), unflag=(), tag
         gql(META_M, {"m": [{"ownerId": shop, "namespace": "gt_sync", "key": "last_run", "type": "date_time",
                             "value": started.replace(microsecond=0).isoformat()}]})
     report["finished"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    report["complete"] = True  # written only here, at the very end: a report without it did not finish
+    report["run_id"] = os.environ.get("GITHUB_RUN_ID", "")
+    report["only"] = os.environ.get("ONLY", "")
     json.dump(report, open("report.json", "w"), indent=1)
     md = [f"# Supplier price and stock sync {'(dry run, nothing changed)' if report['dry_run'] else '(live)'}",
           f"Started {report['started']}",
