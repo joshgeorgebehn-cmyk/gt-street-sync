@@ -28,3 +28,11 @@ Products tagged `supplier:justjap` are matched to Just Jap's public catalogue (j
 Just Jap's price minus `JJ_PRICE_OFFSET` (defaults to `PRICE_OFFSET`, $1) and Sold out when Just Jap shows them sold out.
 Floor for these is `JJ_MIN_PRICE` ($5); the 30% overnight drop check still applies. Switch it off with the variable
 `JUST_JAP` = `0`.
+
+## XForce (on by default)
+
+Products with vendor `XForce` are matched to xforce.com.au by exact product title (word order ignored) and priced
+at XForce's price minus `XF_PRICE_OFFSET` (default: `PRICE_OFFSET`, $1). Sold out on XForce means Sold out here.
+Titles that don't match exactly are listed in the report and left unchanged. Turn off with repo variable `XFORCE=0`.
+
+Just Jap is now off by default. Set repo variable `JUST_JAP=1` to turn it back on.
