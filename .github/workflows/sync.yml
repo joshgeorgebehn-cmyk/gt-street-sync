@@ -32,7 +32,7 @@ jobs:
         id: gate
         run: |
           H=$(TZ=Australia/Sydney date +%H)
-          # Every second day: runs when the Sydney date's day number is even (e.g. 18, 20, 22 Nov 2026), so it
+          # Every second day: runs when the Sydney date's day number is even (19, 21, 23 Nov 2026 and so on; 1 Dec follows 29 Nov), so it
           # alternates correctly across month ends instead of resetting on the 1st.
           DAY=$(( $(date -u -d "$(TZ=Australia/Sydney date +%F)" +%s) / 86400 % 2 ))
           if [ "${{ github.event_name }}" = "schedule" ] && { [ "$H" != "02" ] || [ "$DAY" != "0" ]; }; then
