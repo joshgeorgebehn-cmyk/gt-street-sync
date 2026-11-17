@@ -2,6 +2,7 @@
 NYC: the search post that fills the product table. CoolDrive: search through a real browser (plain requests get 403)."""
 import json, os, re, sys, urllib.parse, urllib.request
 import portal_login as pl
+from skeleton import skeleton
 
 def shape(text):
     try:
@@ -37,6 +38,22 @@ def nyc():
                 print(json.dumps({"path": path, "status": r.status, "type": r.headers.get("Content-Type"), "bytes": len(body), "shape": shape(body)}, indent=1))
         except Exception as e:
             print(f"nyc: {path} failed ({type(e).__name__}: {str(e)[:80]})")
+    try:
+        f = dict(fields)
+        req = urllib.request.Request(cfg["home"] + "/Search/SearchByProductFamily", data=urllib.parse.urlencode(f).encode(),
+              headers={"User-Agent": pl.UA, "Content-Type": "application/x-www-form-urlencoded"})
+        with op.open(req, timeout=120) as r:
+            body = r.read().decode("utf-8", "replace")
+        print("nyc: count of 'Product Code' labels:", len(re.findall(r"Product Code", body)))
+        idx = body.find("Product Code")
+        print("nyc: masked skeleton after the results table header:")
+        print(skeleton(body[idx:] if idx >= 0 else body, None, 160))
+        # Repeated row-ish classes and how many times they repeat (likely one per product).
+        cls = re.findall(r'class="([^"]+)"', body)
+        from collections import Counter
+        print("nyc: repeated classes:", [c for c in Counter(cls).most_common(40) if 20 <= c[1] <= 5000][:20])
+    except Exception as e:
+        print(f"nyc: skeleton failed ({type(e).__name__}: {str(e)[:80]})")
     for ext in re.findall(r'(/api/externaldata/[0-9a-f-]{36})', html)[:1]:
         for meth in ("GET", "POST"):
             try:
@@ -73,6 +90,12 @@ def cooldrive():
             prods = sorted({urllib.parse.urlsplit(h).path for h in page.eval_on_selector_all("a[href]", "e=>e.map(a=>a.href)")
                             if "cooldrive" in h and re.search(r"/(p|product|products|item|parts?)/", h)})[:3]
             labels = sorted(set(x.lower() for x in re.findall(r"(?i)\b(in stock|out of stock|available|on hand|qty|stock|ex gst|inc gst|rrp|your price|trade price|nett?|price)\b", html)))
+            title = page.title()
+            print(json.dumps({"q": q, "title_masked": re.sub(r"\d", "9", title)[:60],
+                              "challenge_markers": [w for w in ("just a moment", "verify you are human", "cf-challenge", "captcha", "access denied", "no results", "0 results")
+                                                    if w in html.lower()]}))
+            print("cooldrive: masked skeleton of search results:")
+            print(skeleton(html, r'class="main-content', 140))
             print(json.dumps({"q": q, "status_path": urllib.parse.urlsplit(page.url).path, "shape": shape(html),
                               "product_paths": prods, "labels": labels, "top_classes": pl.probe(html)["top_classes"][:12]}, indent=1))
             if prods:

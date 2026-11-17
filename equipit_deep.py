@@ -20,9 +20,26 @@ def main():
                     bd = r.request.post_data_json
                     keys.setdefault("prices_request_shape", str({kk: type(vv).__name__ for kk, vv in bd.items()} if isinstance(bd, dict) else type(bd).__name__))
                     pm = r.json().get("model", {}).get("products") or []
-                    if pm: keys["prices_item_keys"] = sorted(pm[0].keys())[:40] if isinstance(pm[0], dict) else type(pm[0]).__name__
+                    if pm and isinstance(pm[0], dict):
+                        keys["prices_item_keys"] = sorted(pm[0].keys())[:40]
+                        pl_ = pm[0].get("prices")
+                        if isinstance(pl_, list) and pl_ and isinstance(pl_[0], dict):
+                            keys["price_entry_keys"] = sorted(pl_[0].keys())[:30]
+                        elif isinstance(pl_, dict):
+                            keys["price_entry_keys"] = sorted(pl_.keys())[:30]
                 except Exception: pass
             if r.request.method == "GET" and u.path.endswith("/api/products"):
+                try:
+                    md = r.json().get("model", {})
+                    ps = md.get("productSettings", {})
+                    keys["product_settings_text"] = {kk: ps.get(kk) for kk in ("productFieldTitle", "productFieldDetail", "outOfStockStatus")}
+                    keys["pagination_values"] = md.get("pagination")
+                    pr0 = (md.get("products") or [{}])[0]
+                    w = pr0.get("warehouseStockValues") or []
+                    if w and isinstance(w[0], dict): keys["warehouse_entry_keys"] = sorted(w[0].keys())
+                    keys["title_masked_examples"] = [re.sub(r"[a-z]", "x", re.sub(r"\d", "9", (x.get("productDisplayTitle") or "")))[:40] for x in (md.get("products") or [])[:3]]
+                    keys["auth_header_present"] = "authorization" in {h.lower() for h in r.request.headers}
+                except Exception: pass
                 keys.setdefault("products_query_names", sorted(dict(__import__("urllib.parse").parse.parse_qsl(u.query)).keys()))
             if "json" in (r.headers.get("content-type") or "") and re.search(r"product|item|stock|catalog|search", u.path, re.I) and k not in keys:
                 try:
