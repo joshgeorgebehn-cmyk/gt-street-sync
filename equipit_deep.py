@@ -15,6 +15,15 @@ def main():
             if "unleashed" not in u.netloc or re.search(r"\.(js|css|png|jpe?g|svg|woff2?|ico)$", u.path): return
             k = f"{r.request.method} {u.netloc}{re.sub(r'/[0-9a-f-]{16,}', '/{id}', u.path)}"
             reqs[k] = r.status
+            if r.request.method == "POST" and "prices" in u.path:
+                try:
+                    bd = r.request.post_data_json
+                    keys.setdefault("prices_request_shape", str({kk: type(vv).__name__ for kk, vv in bd.items()} if isinstance(bd, dict) else type(bd).__name__))
+                    pm = r.json().get("model", {}).get("products") or []
+                    if pm: keys["prices_item_keys"] = sorted(pm[0].keys())[:40] if isinstance(pm[0], dict) else type(pm[0]).__name__
+                except Exception: pass
+            if r.request.method == "GET" and u.path.endswith("/api/products"):
+                keys.setdefault("products_query_names", sorted(dict(__import__("urllib.parse").parse.parse_qsl(u.query)).keys()))
             if "json" in (r.headers.get("content-type") or "") and re.search(r"product|item|stock|catalog|search", u.path, re.I) and k not in keys:
                 try:
                     d = r.json()
