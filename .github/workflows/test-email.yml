@@ -1,0 +1,38 @@
+name: Send test email
+
+# Sends one sample daily email to sales@gtstreet.au to confirm the Microsoft 365 secrets work. Changes nothing.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build a sample report
+        run: |
+          cat > report.json <<'JSON'
+          {"price_changes":[{"variant":"TEST ONLY: GT Form Venom Silver Machined Face 19x9.5 5x112 +40","from":364,"to":394,"image":"https://cdn.shopify.com/s/files/1/0787/6739/0946/files/ALLOY_WHEELS_GT_FORM_VENOM_SILVER_MACHINED_FACE_RIMS_19_20_INCH_MAGS_1.webp?v=1777684373","handle":"gt-form-venom-silver-machined-face"}],
+           "stock_changes":[{"variant":"TEST ONLY: GT Form Venom Silver Machined Face 19x9.5 5x112 +40","now":"Out of stock","image":"https://cdn.shopify.com/s/files/1/0787/6739/0946/files/ALLOY_WHEELS_GT_FORM_VENOM_SILVER_MACHINED_FACE_RIMS_19_20_INCH_MAGS_1.webp?v=1777684373","handle":"gt-form-venom-silver-machined-face"}],
+           "held":[],"errors":[],"cnc_pages_read":0,"cnc_pages_failed":0,"suppliers":{}}
+          JSON
+          printf -- "- Variants re-checked against the supplier: 0\n- Mismatches: 0\n" > verify.md
+      - name: Send
+        env:
+          TEST_EMAIL: "1"
+          JOB_STATUS: success
+          EMAIL_TO: ${{ vars.EMAIL_TO || 'sales@gtstreet.au' }}
+          MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+          MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+          MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
+          MS_SENDER: ${{ vars.MS_SENDER || 'sales@gtstreet.au' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 notify.py

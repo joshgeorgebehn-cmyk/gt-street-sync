@@ -100,6 +100,8 @@ else:
     body = "".join(body)
     text_summary = subject
 
+if os.environ.get("TEST_EMAIL"):
+    subject = "TEST EMAIL (sample data, nothing changed): " + subject
 sent = False
 try:
     if os.environ.get("MS_CLIENT_ID") and os.environ.get("MS_CLIENT_SECRET") and os.environ.get("MS_TENANT_ID"):
@@ -122,8 +124,13 @@ try:
     else:
         print("No email secrets set (MS_* or SMTP_*); email not sent.")
 except Exception as e:
-    print("EMAIL FAILED:", e)
+    detail = ""
+    try: detail = e.read().decode()[:500]
+    except Exception: pass
+    print("EMAIL FAILED:", e, detail)
 
+if os.environ.get("TEST_EMAIL"):
+    raise SystemExit(0 if sent else "Test email was NOT sent; see the error above.")
 # Backup: GitHub issue (GitHub emails and notifies the repo owner).
 if os.environ.get("GH_TOKEN"):
     note = "" if sent else "\n\n**The email to sales@gtstreet.au was NOT sent. Check the email secrets.**"
