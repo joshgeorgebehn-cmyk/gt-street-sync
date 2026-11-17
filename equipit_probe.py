@@ -33,20 +33,21 @@ def main():
                     page.wait_for_timeout(1000)
                     break
 
-        # Click the first VISIBLE sign-in control (the page may hold hidden copies).
-        clicked = False
-        for role in ("button", "link"):
-            controls = page.get_by_role(role, name=re.compile(r"log ?in|sign ?in", re.I))
-            for i in range(controls.count()):
-                c = controls.nth(i)
-                if c.is_visible():
-                    c.click(timeout=15000)
-                    clicked = True
+        # Open the sign-in form only if it is not already on screen. Click the first VISIBLE control.
+        if not page.locator("input[type=password]").first.is_visible():
+            clicked = False
+            for role in ("button", "link"):
+                controls = page.get_by_role(role, name=re.compile(r"log ?in|sign ?in", re.I))
+                for i in range(controls.count()):
+                    c = controls.nth(i)
+                    if c.is_visible() and c.is_enabled():
+                        c.click(timeout=15000)
+                        clicked = True
+                        break
+                if clicked:
                     break
-            if clicked:
-                break
-        if not clicked:
-            sys.exit("equipit: no visible sign-in control found on the home page")
+            if not clicked:
+                sys.exit("equipit: no visible sign-in control found on the home page")
 
         try:
             page.wait_for_selector("input[type=password]", timeout=20000)
@@ -68,9 +69,10 @@ def main():
         user_field.fill(user)
         pwd.fill(password)
 
+        # The submit button stays disabled until both fields have a value, so fill first, then submit.
         submit = form.locator("button[type=submit], input[type=submit]")
-        if submit.count():
-            submit.first.click()
+        if submit.count() and submit.first.is_enabled():
+            submit.first.click(timeout=15000)
         else:
             pwd.press("Enter")
 
