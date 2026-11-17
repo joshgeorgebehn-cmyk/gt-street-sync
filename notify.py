@@ -10,7 +10,7 @@ import csv, datetime, html, json, os, re, smtplib, subprocess, urllib.parse, url
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-TO = os.environ.get("EMAIL_TO") or "joshua.b@gtstreet.au,will.k@gtstreet.au"
+TO = os.environ.get("EMAIL_TO") or "joshua.b@gtstreet.au,will.k@gtstreet.au,billy@breadenmedia.com.au"
 SITE = "https://gtstreet.au/products/"
 LOGO = "https://gtstreet.au/cdn/shop/files/gt-street-logo.png?v=1792649268&width=360"
 
@@ -120,7 +120,7 @@ def shell(inner, ok, headline):
 
 if r is None:
     ok = False
-    subject = f"GT Street sync FAILED {now}: no report produced"
+    subject = "Daily Digest: Stock and Pricing - sync did not finish, check needed"
     body = shell(f'<tr><td style="padding:8px 28px 24px;font-size:15px;line-height:1.5">The sync did not finish, so nothing was confirmed today. '
                  f'Prices and stock may not have been updated. <a href="{run_url}" style="color:{RED}">Open the run</a> to see why.</td></tr>', False, "Sync did not finish")
     text_summary = subject
@@ -138,8 +138,8 @@ else:
     sold = sum(1 for s in sc if s["now"] == "Out of stock")
     ok = status == "success" and not vfail and not errs
     attention = bool(held or errs or vfail)
-    subject = (f"GT Street sync {now}: " + ("all good" if ok and not held else "needs attention") +
-               f", {len(ch)} price changes, {sold} sold out, {len(sc) - sold} back in stock")
+    n = len(ch) + len(sc)
+    subject = f"Daily Digest: Stock and Pricing - {n} change{'s' if n != 1 else ''}"
     headline = "All checks passed" if ok and not held else ("Applied, a few items need you" if ok else "Needs attention")
     inner = []
     lead = (f"{len(ch)} price change{'s' if len(ch) != 1 else ''} and {len(sc)} stock change{'s' if len(sc) != 1 else ''} were applied to the site."

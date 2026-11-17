@@ -29,7 +29,7 @@ jobs:
         env:
           TEST_EMAIL: "1"
           JOB_STATUS: success
-          EMAIL_TO: ${{ vars.EMAIL_TO || 'joshua.b@gtstreet.au,will.k@gtstreet.au' }}
+          EMAIL_TO: ${{ vars.EMAIL_TO || 'joshua.b@gtstreet.au,will.k@gtstreet.au,billy@breadenmedia.com.au' }}
           MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
           MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
           MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
