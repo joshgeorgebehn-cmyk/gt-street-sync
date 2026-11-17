@@ -87,3 +87,14 @@ from `tests/fixtures`; it never touches Shopify.
 - Workflow permissions are set in the YAML: digest `contents: read, actions: read, issues: write`.
 
 **Tests.** `python3 -m unittest discover -s tests -v` (41 tests, all external services mocked).
+
+## Dealer portals (NYC Wheels and CoolDrive)
+
+Logins are stored as GitHub Actions secrets only, never in code, README or logs. Secret names: `NYC_USER`, `NYC_PASS`,
+`COOLDRIVE_USER`, `COOLDRIVE_PASS`.
+
+Agreed rules, which the portal code must follow:
+- **NYC Wheels: stock levels only.** It never sets or changes a price.
+- **CoolDrive: stock and pricing.** Its prices and stock may both be applied, under the same rule as the other suppliers
+  (supplier's shown price less $1, with the same 20% hold and minimum price protections).
+- Neither portal is read until its terms have been checked for automated access.
