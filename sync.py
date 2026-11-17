@@ -310,7 +310,7 @@ def sku_norm(x, prefix=""):
     return re.sub(r"[^A-Z0-9]", "", x)
 
 def shopify_supplier_catalogue(cfg):
-    """{SKU: rec} and {title key: rec} where rec = (price, available, sku, handle). Ambiguous titles are dropped."""
+    """{SKU: rec} and {title key: rec} where rec = (price, available, sku, handle, variant id). Ambiguous titles are dropped."""
     store, brand = cfg["store"].rstrip("/"), cfg.get("brand", "")
     by_sku, by_title, seen, page = {}, {}, {}, 1
     while page < 200:
@@ -322,15 +322,47 @@ def shopify_supplier_catalogue(cfg):
         if not ps: break
         for p in ps:
             for v in p["variants"]:
-                rec = (float(v["price"]), bool(v.get("available", True)), clean_sku(v.get("sku")), p["handle"])
+                rec = (float(v["price"]), bool(v.get("available", True)), clean_sku(v.get("sku")), p["handle"], v["id"])
                 if rec[2]: by_sku[sku_norm(rec[2])] = rec
             if len(p["variants"]) == 1:
                 k = title_key(p["title"], brand)
                 seen[k] = seen.get(k, 0) + 1
                 by_title[k] = (float(p["variants"][0]["price"]), bool(p["variants"][0].get("available", True)),
-                               clean_sku(p["variants"][0].get("sku")), p["handle"])
+                               clean_sku(p["variants"][0].get("sku")), p["handle"], p["variants"][0]["id"])
         page += 1; time.sleep(float(cfg.get("delay", 1.0)))
     return by_sku, {k: v for k, v in by_title.items() if seen[k] == 1}
+
+LOW_QTY = int(os.environ.get("LOW_QTY", "5"))  # at or below this the supplier's item is shown as Low stock (Alu-Cab uses 5)
+
+def supplier_page_stock(store, handle):
+    """{variant id: (quantity, policy)} as published on the supplier's own product page (their theme embeds it)."""
+    st, t = http(f"{store}/products/{handle}")
+    if st != 200 or not t: return {}
+    t = t.replace('\\"', '"')
+    out = {}
+    for m in re.finditer(r'"id"\s*:\s*(\d{10,})((?:(?!"id"\s*:\s*\d{10,}).){0,4000}?)"inventory_quantity"\s*:\s*(-?\d+)', t, re.S):
+        vid, mid, qty = int(m.group(1)), m.group(2), int(m.group(3))
+        pol = re.search(r'"inventory_policy"\s*:\s*"(\w+)"', mid + t[m.end():m.end() + 200])
+        out.setdefault(vid, (qty, pol.group(1) if pol else ""))
+    return out
+
+def stock_state(available, qty, policy):
+    """The supplier's own state: ("in"|"low"|"backorder"|"out", qty), or None if the two readings disagree."""
+    if qty is None: return None
+    if not available:
+        return ("out", 0) if qty <= 0 and policy != "continue" else None
+    if qty > LOW_QTY: return ("in", qty)
+    if qty > 0: return ("low", qty)
+    if policy == "continue": return ("backorder", 0)
+    return ("in", qty)  # sellable with no tracked quantity: the supplier shows it as available
+
+def our_state(v):
+    if v["tracked"] is not True: return "in"
+    q = v.get("qty") or 0
+    if q <= 0: return "backorder" if v["policy"] == "CONTINUE" else "out"
+    return "low" if q <= LOW_QTY else "in"
+
+STATE_LABEL = {"in": "In stock", "low": "Low stock", "backorder": "Back order", "out": "Out of stock"}
 
 def load_suppliers():
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "suppliers.json")
@@ -412,7 +444,8 @@ def main():
             if new_sku != v["sku"]:
                 sku_set[v["id"]] = new_sku
                 report.setdefault("sku_changes", []).append({"product": name, "from": v["sku"], "to": new_sku})
-        decisions.append((p, v, name, pg["price"], pg["out"], PRICE_OFFSET, MIN_PRICE))
+        cnc_state = ("out", 0) if pg["out"] else (("backorder", 0) if pg.get("backorder") else ("in", STOCK_QTY))
+        decisions.append((p, v, name, pg["price"], cnc_state, PRICE_OFFSET, MIN_PRICE))
         report.setdefault("cnc_applied", []).append({"variant": v["id"], "url": url, "name": name})
 
     # Other suppliers with a public Shopify catalogue (suppliers.json).
@@ -428,6 +461,7 @@ def main():
         prods = shopify_products(cfg["query"]) if source == "admin" else []
         rep["products"] = len(prods)
         offset, floor = float(cfg.get("price_offset", PRICE_OFFSET)), float(cfg.get("min_price", 5))
+        matched = []
         for p in prods:
             for v in p["variants"]:
                 hit = by_sku.get(sku_norm(v["sku"], cfg.get("sku_prefix", ""))) if v["sku"] else None
@@ -436,17 +470,33 @@ def main():
                 if not hit:
                     rep["unmatched"].append(f"{p['title']} ({v['sku'] or 'no SKU'})"); continue
                 rep["variants_matched"] += 1
-                if cfg.get("set_sku") and hit[2] and v["sku"] != hit[2]:
-                    sku_set[v["id"]] = hit[2]
-                    report.setdefault("sku_changes", []).append({"product": p["title"], "from": v["sku"], "to": hit[2]})
-                src_out = (not hit[1]) if cfg.get("use_stock", True) else None  # None = price only, stock untouched
-                decisions.append((p, v, f"{p['title']} ({name_} {hit[2] or hit[3]})", hit[0], src_out, offset, floor))
-                report.setdefault("supplier_applied", []).append({"variant": v["id"], "store": cfg["store"].rstrip("/"),
-                    "handle": hit[3], "sku": hit[2], "offset": offset, "stock": src_out is not None, "name": p["title"]})
+                matched.append((p, v, hit))
+        # Stock: read every matched product's page on the supplier's site for the exact quantity and back order setting.
+        pages = {}
+        if cfg.get("use_stock", True):
+            handles = sorted({h[3] for _, _, h in matched})
+            with cf.ThreadPoolExecutor(int(cfg.get("page_workers", 4))) as ex:
+                for hd, res in zip(handles, ex.map(lambda x: supplier_page_stock(cfg["store"].rstrip("/"), x), handles)):
+                    pages[hd] = res
+        rep["stock_unverified"] = 0
+        for p, v, hit in matched:
+            if cfg.get("set_sku") and hit[2] and v["sku"] != hit[2]:
+                sku_set[v["id"]] = hit[2]
+                report.setdefault("sku_changes", []).append({"product": p["title"], "from": v["sku"], "to": hit[2]})
+            src = None  # None = stock left unchanged
+            if cfg.get("use_stock", True):
+                q = pages.get(hit[3], {}).get(hit[4])
+                src = stock_state(hit[1], q[0], q[1]) if q else None
+                if src is None:
+                    rep["stock_unverified"] += 1
+                    report.setdefault("stock_unverified", []).append(f"{p['title']} ({name_} {hit[2] or hit[3]})")
+            decisions.append((p, v, f"{p['title']} ({name_} {hit[2] or hit[3]})", hit[0], src, offset, floor))
+            report.setdefault("supplier_applied", []).append({"variant": v["id"], "store": cfg["store"].rstrip("/"),
+                "handle": hit[3], "sku": hit[2], "offset": offset, "stock": src is not None, "state": src[0] if src else None, "name": p["title"]})
 
     updates = {}  # product id -> list of variant inputs
     stock_targets = {}  # inventory item id -> available quantity to hold at the store location
-    for p, v, name, src_price, src_out, offset, floor in decisions:
+    for p, v, name, src_price, src, offset, floor in decisions:
         inp = {"id": v["id"]}
         new_price = round(src_price - offset, 2)
         if abs(new_price - v["price"]) >= 0.01:
@@ -456,15 +506,18 @@ def main():
                 inp["price"] = f"{new_price:.2f}"
                 report["price_changes"].append({"variant": name, "product": p["title"], "from": v["price"], "to": new_price, "image": p.get("image", ""), "handle": p.get("handle", "")})
         own = OWN_STOCK_TAG in [t.lower() for t in p.get("tags", [])]
-        if src_out is not None and not own and v["item"]:
-            if v["tracked"] is not True or v["policy"] != "DENY":
-                inp["inventoryPolicy"] = "DENY"; inp["inventoryItem"] = {"tracked": True}
-            stock_targets[v["item"]] = 0 if src_out else STOCK_QTY
-            was_in = (v.get("qty") or 0) > 0 and v["tracked"] is True
-            if was_in == src_out:  # an actual change today
-                report.setdefault("stock_changes", []).append({"variant": name, "product": p["title"], "now": "Out of stock" if src_out else "In stock",
-                                                               "image": p.get("image", ""), "handle": p.get("handle", "")})
-            (report["sold_out"] if src_out else report["back_in_stock"]).append(name)
+        if src is not None and not own and v["item"]:
+            state, sq = src
+            want_policy = "CONTINUE" if state == "backorder" else "DENY"
+            if v["tracked"] is not True or v["policy"] != want_policy:
+                inp["inventoryPolicy"] = want_policy; inp["inventoryItem"] = {"tracked": True}
+            # In stock: 20. Low stock: the supplier's exact quantity. Back order and out of stock: 0 (back order stays orderable).
+            stock_targets[v["item"]] = STOCK_QTY if state == "in" else (sq if state == "low" else 0)
+            if our_state(v) != state:  # an actual change today
+                report.setdefault("stock_changes", []).append({"variant": name, "product": p["title"],
+                    "now": STATE_LABEL[state] + (f" ({sq} left)" if state == "low" else ""), "state": state,
+                    "image": p.get("image", ""), "handle": p.get("handle", "")})
+            (report["sold_out"] if state == "out" else report["back_in_stock"]).append(name)
         if v["id"] in sku_set:
             inp.setdefault("inventoryItem", {})["sku"] = sku_set[v["id"]]
         if len(inp) > 1:

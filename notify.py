@@ -136,6 +136,7 @@ else:
     skipped = r.get("cnc_skipped_pages", [])
     ups = sum(1 for c in ch if float(c["to"]) > float(c["from"]))
     sold = sum(1 for s in sc if s["now"] == "Out of stock")
+    restocked = sum(1 for s in sc if s.get("state", "in" if s["now"] == "In stock" else "") == "in")
     ok = status == "success" and not vfail and not errs
     attention = bool(held or errs or vfail)
     n = len(ch) + len(sc)
@@ -151,7 +152,7 @@ else:
         lead += f' <b style="color:{RED}">The independent recheck did not run.</b>'
     inner.append(f'<tr><td style="padding:6px 28px 14px;font-size:15px;line-height:1.5;color:#333">{lead}</td></tr>')
     inner.append(f'<tr><td style="padding:0 22px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>'
-                 + tile(len(ch), "Price changes") + tile(sold, "Sold out", RED if sold else INK) + tile(len(sc) - sold, "Restocked", GREEN if len(sc) - sold else INK)
+                 + tile(len(ch), "Price changes") + tile(sold, "Sold out", RED if sold else INK) + tile(restocked, "Restocked", GREEN if restocked else INK)
                  + tile(len(held) + len(errs), "Need you", RED if (held or errs) else INK) + '</tr></table></td></tr>')
 
     # 1. Things that need a person, first.
@@ -179,10 +180,16 @@ else:
         more = f" Showing the largest 80 groups; every change is in price_changes.csv on the run." if len(g) > 80 else ""
         inner.append(section("Price changes", f"{len(ch)} applied: {ups} up, {len(ch) - ups} down. Largest first.{more}", [item_row(c, pc(c)) for c in g[:80]]))
     if sc:
+        order = {"out": 0, "backorder": 1, "low": 2, "in": 3}
         g = group(sc, lambda s: (s["now"],))
-        g.sort(key=lambda s: s["now"] != "Out of stock")
-        rows = [item_row(s, pill(("Sold out" if s["now"] == "Out of stock" else "Back in stock"), RED if s["now"] == "Out of stock" else GREEN)) for s in g[:80]]
-        inner.append(section("Stock changes", f"{sold} sold out, {len(sc) - sold} back in stock.", rows))
+        g.sort(key=lambda s: order.get(s.get("state"), 3 if s["now"] == "In stock" else 0))
+        col = {"out": RED, "backorder": AMBER, "low": AMBER, "in": GREEN}
+        def st_pill(s):
+            k = s.get("state") or ("out" if s["now"] == "Out of stock" else "in")
+            return pill({"out": "Sold out", "backorder": "Back order", "in": "In stock"}.get(k, esc(s["now"])), col[k])
+        rows = [item_row(s, st_pill(s)) for s in g[:80]]
+        n_bo = sum(1 for s in sc if s.get("state") == "backorder"); n_low = sum(1 for s in sc if s.get("state") == "low")
+        inner.append(section("Stock changes", f"{sold} sold out, {restocked} back in stock, {n_low} low stock, {n_bo} now on back order (still orderable). Copied from each supplier's own page.", rows))
 
     # 3. Supplier check summary.
     srows = [f'<tr><td style="padding:9px 0;border-bottom:1px solid {LINE};font-size:14px;font-weight:600">CNC Wheels</td>'
