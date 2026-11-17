@@ -101,7 +101,8 @@ def token():
                    headers={"Content-Type": "application/x-www-form-urlencoded"})
     if st != 200:
         # Shopify's error body names the cause (invalid_client, app not installed, etc). It never contains the secret.
-        m = re.search(r"Oauth error[^<]*", txt) or re.search(r'"error[^}]*', txt)
+        plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", txt))
+        m = re.search(r"Oauth error \S+", plain) or re.search(r'"error[^}]*', txt)
         sys.exit(f"Could not get a Shopify access token from {STORE} (HTTP {st}): {m.group(0).strip() if m else txt[:200]}")
     _TOKEN = json.loads(txt)["access_token"]; return _TOKEN
 
