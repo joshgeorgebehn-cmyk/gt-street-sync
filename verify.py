@@ -6,7 +6,7 @@ variant back from Shopify, and compares:
   price      Shopify price == supplier price minus the offset (unless the run held that change for review)
   stock      Shopify sellable == supplier in stock (for suppliers whose stock is synced)
 Any mismatch fails the workflow (red cross in GitHub, which emails the repo owner) and is listed in verify.md.
-Sample size: VERIFY_CNC (default 40) CNC variants and VERIFY_SUPPLIER (default 20) per Shopify-platform supplier.
+Sample size: VERIFY_CNC (default 100) CNC variants and VERIFY_SUPPLIER (default 20) per Shopify-platform supplier.
 """
 import os, sys, json, random
 from sync import gql, http, cnc_page, DRY_RUN
@@ -33,7 +33,7 @@ def main():
     held = {h.get("id") for h in r.get("held", [])}
     rnd = random.Random()
     cnc = r.get("cnc_applied", [])
-    cnc = rnd.sample(cnc, min(int(os.environ.get("VERIFY_CNC", "40")), len(cnc)))
+    cnc = rnd.sample(cnc, min(int(os.environ.get("VERIFY_CNC", "100")), len(cnc)))
     sup = {}
     for a in r.get("supplier_applied", []):
         sup.setdefault(a["store"], []).append(a)

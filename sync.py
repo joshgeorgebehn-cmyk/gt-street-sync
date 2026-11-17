@@ -48,8 +48,8 @@ CNC_SET_SKU = os.environ.get("CNC_SET_SKU", "1") == "1"
 STOCK_QTY = int(os.environ.get("STOCK_QTY", "20"))
 OWN_STOCK_TAG = os.environ.get("OWN_STOCK_TAG", "own-stock").lower()
 MAX_DROP = float(os.environ.get("MAX_DROP", "0.20"))  # a drop of more than 20% overnight is held for a person to check
-CNC_DELAY = float(os.environ.get("CNC_DELAY", "0.8"))
-CNC_WORKERS = int(os.environ.get("CNC_WORKERS", "2"))
+CNC_DELAY = float(os.environ.get("CNC_DELAY", "0.5"))
+CNC_WORKERS = int(os.environ.get("CNC_WORKERS", "4"))
 VENDORS = ("GT Form", "JSR", "Black Rock")
 BRAND_PREFIX = ("gt-form", "jsr", "black-rock")
 UA = "GTStreetStockSync/1.0 (+https://gtstreet.au; sales@gtstreet.au)"
@@ -72,12 +72,16 @@ SIZE_RE = re.compile(r"^(\d{2})x(\d{1,2})$")
 
 
 # ---------------------------------------------------------------- HTTP helpers
+def fresh(url):
+    """Add a unique query value so no website cache, CDN or proxy can hand back an old copy of the page."""
+    return url + ("&" if "?" in url else "?") + f"_gt={time.time_ns()}"
+
 def http(url, data=None, headers=None, timeout=60, retries=3):
-    h = {"User-Agent": UA, "Accept-Encoding": "gzip"}
+    h = {"User-Agent": UA, "Accept-Encoding": "gzip", "Cache-Control": "no-cache, no-store, max-age=0", "Pragma": "no-cache"}
     h.update(headers or {})
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(url, data=data, headers=h)
+            req = urllib.request.Request(fresh(url) if data is None else url, data=data, headers=h)
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 body = r.read()
                 if r.headers.get("Content-Encoding") == "gzip":
@@ -143,12 +147,12 @@ def gql(query, variables=None):
 PRODUCTS_Q = """
 query($cursor:String,$q:String!){ products(first:50, after:$cursor, query:$q){
   pageInfo{hasNextPage endCursor}
-  nodes{ id title handle vendor status tags
-    variants(first:250){ pageInfo{hasNextPage endCursor} nodes{ id sku price inventoryPolicy selectedOptions{name value}
+  nodes{ id title handle vendor status tags featuredMedia{ preview{ image{ url } } }
+    variants(first:250){ pageInfo{hasNextPage endCursor} nodes{ id sku price inventoryQuantity inventoryPolicy selectedOptions{name value}
       inventoryItem{ id tracked } } } } } }"""
 MORE_VARIANTS_Q = """
 query($id:ID!,$cursor:String){ product(id:$id){ variants(first:250, after:$cursor){ pageInfo{hasNextPage endCursor}
-  nodes{ id sku price inventoryPolicy selectedOptions{name value} inventoryItem{ id tracked } } } } }"""
+  nodes{ id sku price inventoryQuantity inventoryPolicy selectedOptions{name value} inventoryItem{ id tracked } } } } }"""
 
 def shopify_products(search=None):
     q = search or "(" + " OR ".join(f'vendor:"{v}"' for v in VENDORS) + ")"
@@ -160,8 +164,9 @@ def shopify_products(search=None):
             while vinfo["hasNextPage"]:
                 more = gql(MORE_VARIANTS_Q, {"id": p["id"], "cursor": vinfo["endCursor"]})["product"]["variants"]
                 vs += more["nodes"]; vinfo = more["pageInfo"]
-            out.append({"id": p["id"], "title": p["title"], "handle": p["handle"], "status": p["status"], "tags": p.get("tags", []), "variants": [
-                {"id": v["id"], "sku": (v.get("sku") or "").strip(), "price": float(v["price"]), "policy": v["inventoryPolicy"],
+            img = ((((p.get("featuredMedia") or {}).get("preview") or {}).get("image")) or {}).get("url", "")
+            out.append({"id": p["id"], "title": p["title"], "handle": p["handle"], "status": p["status"], "tags": p.get("tags", []), "image": img, "variants": [
+                {"id": v["id"], "sku": (v.get("sku") or "").strip(), "price": float(v["price"]), "qty": v.get("inventoryQuantity"), "policy": v["inventoryPolicy"],
                  "tracked": v["inventoryItem"]["tracked"], "item": v["inventoryItem"]["id"],
                  "opts": {o["name"]: o["value"] for o in v["selectedOptions"]}} for v in vs]})
         if not d["pageInfo"]["hasNextPage"]: break
@@ -179,7 +184,7 @@ def storefront_products(all_vendors=False):
             if not all_vendors and p["vendor"] not in VENDORS: continue
             names = [o["name"] for o in p["options"]]
             out.append({"id": p["id"], "title": p["title"], "handle": p["handle"], "status": "ACTIVE", "tags": p.get("tags", []), "variants": [
-                {"id": v["id"], "sku": (v.get("sku") or "").strip(), "price": float(v["price"]), "policy": None, "tracked": None, "item": None,
+                {"id": v["id"], "sku": (v.get("sku") or "").strip(), "price": float(v["price"]), "qty": v.get("inventoryQuantity"), "policy": None, "tracked": None, "item": None,
                  "opts": {names[i]: v[f"option{i+1}"] for i in range(len(names))}} for v in p["variants"]]})
         page += 1
     return out
@@ -376,32 +381,12 @@ def main():
 
     urls = sorted({u for _, _, u in plan})
     print(f"{len(products)} products, {len(plan)} variants matched, reading {len(urls)} CNC pages", flush=True)
-    # Incremental: reuse yesterday's result for pages CNC hasn't changed since (per its sitemap), but re-read every
-    # page at least every CACHE_MAX_DAYS days in case a stock change doesn't update CNC's last-modified date.
-    cache_path, max_age = os.environ.get("CNC_CACHE", "cnc_cache.json"), float(os.environ.get("CACHE_MAX_DAYS", "3"))
-    try:
-        cache = json.load(open(cache_path))
-    except Exception:
-        cache = {}
-    now = time.time()
-    pages, to_read = {}, []
-    for u in urls:
-        c = cache.get(u)
-        if c and c.get("ok") and c.get("v") == CNC_PARSER_VERSION and "sku" in c and c.get("lastmod") and c["lastmod"] == CNC_LASTMOD.get(u) and now - c.get("at", 0) < max_age * 86400:
-            pages[u] = c
-        else:
-            to_read.append(u)
-    report["cnc_pages_from_cache"] = len(urls) - len(to_read)
-    print(f"{len(to_read)} CNC pages changed or due for a recheck; {len(urls) - len(to_read)} unchanged since the last run", flush=True)
+    # Every CNC page is read live from cncwheels.com.au on every run. Nothing is reused from earlier runs, and
+    # nothing is taken from Google or any other copy of CNC's data.
+    pages = {}
     with cf.ThreadPoolExecutor(CNC_WORKERS) as ex:
-        for u, res in zip(to_read, ex.map(cnc_page, to_read)):
+        for u, res in zip(urls, ex.map(cnc_page, urls)):
             pages[u] = res
-            if res.get("ok"):
-                cache[u] = dict(res, lastmod=CNC_LASTMOD.get(u), at=now)
-    try:
-        json.dump(cache, open(cache_path, "w"))
-    except Exception as e:
-        report["errors"].append(f"Could not save the CNC cache: {e}")
     failed = [u for u, r in pages.items() if not r["ok"]]
     report["cnc_pages_read"] = len(urls); report["cnc_pages_failed"] = len(failed)
     report["cnc_skipped_pages"] = [{"url": u, "why": pages[u].get("why") or f"HTTP {pages[u].get('status')}"} for u in failed][:300]
@@ -466,15 +451,19 @@ def main():
         new_price = round(src_price - offset, 2)
         if abs(new_price - v["price"]) >= 0.01:
             if new_price < floor or (v["price"] > 0 and new_price < v["price"] * (1 - MAX_DROP)):
-                report["held"].append({"variant": name, "id": v["id"], "current": v["price"], "cnc": src_price})
+                report["held"].append({"variant": name, "id": v["id"], "current": v["price"], "cnc": src_price, "image": p.get("image", ""), "handle": p.get("handle", "")})
             else:
                 inp["price"] = f"{new_price:.2f}"
-                report["price_changes"].append({"variant": name, "from": v["price"], "to": new_price})
+                report["price_changes"].append({"variant": name, "from": v["price"], "to": new_price, "image": p.get("image", ""), "handle": p.get("handle", "")})
         own = OWN_STOCK_TAG in [t.lower() for t in p.get("tags", [])]
         if src_out is not None and not own and v["item"]:
             if v["tracked"] is not True or v["policy"] != "DENY":
                 inp["inventoryPolicy"] = "DENY"; inp["inventoryItem"] = {"tracked": True}
             stock_targets[v["item"]] = 0 if src_out else STOCK_QTY
+            was_in = (v.get("qty") or 0) > 0 and v["tracked"] is True
+            if was_in == src_out:  # an actual change today
+                report.setdefault("stock_changes", []).append({"variant": name, "now": "Out of stock" if src_out else "In stock",
+                                                               "image": p.get("image", ""), "handle": p.get("handle", "")})
             (report["sold_out"] if src_out else report["back_in_stock"]).append(name)
         if v["id"] in sku_set:
             inp.setdefault("inventoryItem", {})["sku"] = sku_set[v["id"]]
@@ -549,7 +538,7 @@ def finish(report, started, stock_targets, updates):
     md = [f"# Supplier price and stock sync {'(dry run, nothing changed)' if report['dry_run'] else '(live)'}",
           f"Started {report['started']}",
           f"- GT Street products checked: {report['products']}",
-          f"- CNC pages checked: {report.get('cnc_pages_read', 0)} (unchanged since last run, reused: {report.get('cnc_pages_from_cache', 0)}; failed: {report.get('cnc_pages_failed', 0)})",
+          f"- CNC pages checked: {report.get('cnc_pages_read', 0)} (all read live; skipped: {report.get('cnc_pages_failed', 0)})",
           f"- Price changes: {len(report['price_changes'])}",
           f"- Held for review (under ${MIN_PRICE:.0f} or over the drop limit): {len(report['held'])}",
           f"- Sold out at the supplier: {len(report['sold_out'])}",
