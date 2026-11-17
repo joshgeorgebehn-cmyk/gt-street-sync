@@ -30,11 +30,11 @@ Credentials (GitHub Actions secrets, never in code):
   SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET  for apps that use the client credentials grant.
 """
 import os, re, json, time, gzip, html, sys, datetime, concurrent.futures as cf
-import urllib.request, urllib.error
+import urllib.request, urllib.error, urllib.parse
 from norm import norm
 
 API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-10")
-STORE = os.environ.get("SHOPIFY_STORE", "srbc11-w2.myshopify.com")
+STORE = re.sub(r"^https?://", "", os.environ.get("SHOPIFY_STORE", "srbc11-w2.myshopify.com").strip()).strip("/")
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 PRICE_OFFSET = float(os.environ.get("PRICE_OFFSET", "1"))
 MIN_PRICE = float(os.environ.get("MIN_PRICE", "150"))
@@ -96,10 +96,13 @@ def token():
     cid, sec = os.environ.get("SHOPIFY_CLIENT_ID"), os.environ.get("SHOPIFY_CLIENT_SECRET")
     if not (cid and sec):
         sys.exit("No Shopify credentials: set SHOPIFY_ADMIN_TOKEN, or SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET")
-    body = json.dumps({"client_id": cid, "client_secret": sec, "grant_type": "client_credentials"}).encode()
-    st, txt = http(f"https://{STORE}/admin/oauth/access_token", data=body, headers={"Content-Type": "application/json"})
+    body = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": cid.strip(), "client_secret": sec.strip()}).encode()
+    st, txt = http(f"https://{STORE}/admin/oauth/access_token", data=body,
+                   headers={"Content-Type": "application/x-www-form-urlencoded"})
     if st != 200:
-        sys.exit(f"Could not get a Shopify access token (HTTP {st}). Check the app's client ID and secret.")
+        # Shopify's error body names the cause (invalid_client, app not installed, etc). It never contains the secret.
+        m = re.search(r"Oauth error[^<]*", txt) or re.search(r'"error[^}]*', txt)
+        sys.exit(f"Could not get a Shopify access token from {STORE} (HTTP {st}): {m.group(0).strip() if m else txt[:200]}")
     _TOKEN = json.loads(txt)["access_token"]; return _TOKEN
 
 def gql(query, variables=None):
