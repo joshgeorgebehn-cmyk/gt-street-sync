@@ -12,45 +12,117 @@ from email.mime.text import MIMEText
 
 TO = os.environ.get("EMAIL_TO") or "joshua.b@gtstreet.au,will.k@gtstreet.au"
 SITE = "https://gtstreet.au/products/"
+LOGO = "https://gtstreet.au/cdn/shop/files/gt-street-logo.png?v=1792649268&width=360"
+
+# GT Street styling (from the live theme): near black, brand red, silver greys, Barlow.
+INK, PANEL, RED, GREEN, AMBER = "#0A0A0B", "#121214", "#D0102B", "#1E8E3E", "#B26A00"
+GREY, LIGHT, LINE, BG = "#6B6B75", "#F4F4F6", "#E4E4E8", "#ECECEF"
+FONT = "Barlow,'Helvetica Neue',Helvetica,Arial,sans-serif"
 
 def read(p):
     try: return open(p).read()
     except OSError: return ""
 
-def thumb(url, w=64):
+def thumb(url, w=96):
     if not url: return ""
     return url + ("&" if "?" in url else "?") + f"width={w}"
 
 def money(x): return f"${float(x):,.2f}"
+def esc(x): return html.escape(str(x))
 
 try: r = json.load(open("report.json"))
 except Exception: r = None
 status = os.environ.get("JOB_STATUS", "unknown")
 run_url = os.environ.get("RUN_URL", "")
 owner = os.environ.get("REPO_OWNER", "")
-now = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=11))).strftime("%a %d %b %Y")
+local = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=11)))
+now = local.strftime("%a %d %b %Y")
 verify = read("verify.md")
 vfail = "## Mismatches" in verify
 vchecked = re.search(r"re-checked against the supplier: (\d+)", verify)
 vbad = re.search(r"Mismatches: (\d+)", verify)
 
-def row(item, right):
-    img = thumb(item.get("image"))
-    link = SITE + item["handle"] if item.get("handle") else ""
-    pic = f'<img src="{html.escape(img)}" width="48" height="48" style="object-fit:contain;border:1px solid #eee;border-radius:4px" alt="">' if img else ""
-    name = html.escape(item["variant"])
-    name = f'<a href="{link}" style="color:#111;text-decoration:none">{name}</a>' if link else name
-    return f'<tr><td style="padding:4px 8px 4px 0">{pic}</td><td style="padding:4px 8px;font-size:13px">{name}</td><td style="padding:4px 0;font-size:13px;white-space:nowrap;text-align:right">{right}</td></tr>'
+def detail(item):
+    """The size or part detail, without the product name in front."""
+    v, p = item.get("variant", ""), item.get("product", "")
+    d = v[len(p):].strip() if p and v.startswith(p) else v
+    return d.strip("() ")
 
-def table(title, rows, note=""):
+def group(items, key):
+    """Collapse rows that are the same product with the same change, e.g. 8 PCDs all going $344 to $358."""
+    out = {}
+    for it in items:
+        k = (it.get("product") or it["variant"],) + key(it)
+        g = out.setdefault(k, dict(it, details=[]))
+        d = detail(it)
+        if d and d not in g["details"]: g["details"].append(d)
+    return list(out.values())
+
+def pic(item):
+    img = thumb(item.get("image"))
+    if not img: return f'<div style="width:48px;height:48px;background:{LIGHT};border-radius:6px"></div>'
+    return f'<img src="{esc(img)}" width="48" height="48" alt="" style="display:block;width:48px;height:48px;object-fit:contain;background:#fff;border:1px solid {LINE};border-radius:6px">'
+
+def name_cell(item):
+    title = item.get("product") or item["variant"]
+    link = SITE + item["handle"] if item.get("handle") else ""
+    t = f'<a href="{link}" style="color:{INK};text-decoration:none;font-weight:600">{esc(title)}</a>' if link else f'<b>{esc(title)}</b>'
+    ds = item.get("details") or []
+    sub = ""
+    if len(ds) == 1:
+        sub = f'<div style="color:{GREY};font-size:12px;margin-top:2px">{esc(ds[0])}</div>'
+    elif ds:
+        # Show what all the sizes share once (e.g. 18x7.5 +40), then only what differs (e.g. the PCDs).
+        toks = [d.split() for d in ds]
+        common = [t for t in toks[0] if all(t in x for x in toks[1:])]
+        diff = [" ".join(t for t in x if t not in common) or " ".join(x) for x in toks]
+        shown = ", ".join(diff[:8]) + (f" and {len(diff) - 8} more" if len(diff) > 8 else "")
+        lead = (" ".join(common) + " in ") if common else ""
+        sub = f'<div style="color:{GREY};font-size:12px;margin-top:2px">{esc(lead)}{len(ds)} sizes: {esc(shown)}</div>'
+    return t + sub
+
+def item_row(item, right):
+    return (f'<tr><td style="padding:10px 12px 10px 0;border-bottom:1px solid {LINE};width:48px;vertical-align:top">{pic(item)}</td>'
+            f'<td style="padding:10px 8px;border-bottom:1px solid {LINE};font-size:14px;line-height:1.35;vertical-align:top">{name_cell(item)}</td>'
+            f'<td style="padding:10px 0 10px 8px;border-bottom:1px solid {LINE};font-size:14px;text-align:right;white-space:nowrap;vertical-align:top">{right}</td></tr>')
+
+def pill(text, col):
+    return f'<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:{col}1A;color:{col};font-size:12px;font-weight:700">{text}</span>'
+
+def section(title, count_note, rows, note=""):
     if not rows: return ""
-    return (f'<h3 style="font-size:15px;margin:22px 0 6px">{title}</h3>' + (f'<p style="font-size:12px;color:#666;margin:0 0 6px">{note}</p>' if note else "") +
-            '<table style="border-collapse:collapse;width:100%">' + "".join(rows) + "</table>")
+    return (f'<tr><td style="padding:28px 28px 0"><div style="font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:{RED};font-weight:700">{esc(title)}</div>'
+            f'<div style="font-size:13px;color:{GREY};margin:4px 0 8px">{count_note}</div>'
+            + (f'<div style="font-size:13px;color:{INK};background:{LIGHT};padding:10px 12px;border-radius:6px;margin-bottom:6px">{note}</div>' if note else "")
+            + f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">{"".join(rows)}</table></td></tr>')
+
+def tile(value, label, col=INK):
+    return (f'<td width="25%" style="padding:6px"><div style="background:{LIGHT};border-radius:8px;padding:14px 8px;text-align:center">'
+            f'<div style="font-size:26px;font-weight:700;color:{col};line-height:1">{value}</div>'
+            f'<div style="font-size:11px;color:{GREY};text-transform:uppercase;letter-spacing:1px;margin-top:6px">{label}</div></div></td>')
+
+def shell(inner, ok, headline):
+    col = GREEN if ok else RED
+    return (f'<!doctype html><html><body style="margin:0;padding:0;background:{BG}">'
+            f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:{BG}"><tr><td align="center" style="padding:24px 12px">'
+            f'<table role="presentation" width="640" cellspacing="0" cellpadding="0" style="width:100%;max-width:640px;background:#fff;border-radius:10px;overflow:hidden;font-family:{FONT};color:{INK}">'
+            f'<tr><td style="background:{INK};padding:22px 28px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>'
+            f'<td><img src="{LOGO}" width="150" alt="GT Street" style="display:block;width:150px;height:auto"></td>'
+            f'<td align="right" style="color:#A3A3AD;font-size:12px;letter-spacing:1px;text-transform:uppercase">Supplier sync<br><span style="color:#ECECEF;font-size:14px;letter-spacing:0">{now}</span></td>'
+            f'</tr></table></td></tr>'
+            f'<tr><td style="background:{col};height:4px;line-height:4px;font-size:0">&nbsp;</td></tr>'
+            f'<tr><td style="padding:24px 28px 4px"><div style="font-size:22px;font-weight:700">{"&#10003; " if ok else "&#9888; "}{headline}</div></td></tr>'
+            + inner +
+            f'<tr><td style="padding:28px;font-size:12px;color:{GREY};line-height:1.6;border-top:1px solid {LINE}">'
+            f'Prices are set at each supplier\'s live website price less $1. Stock shows 20 when the supplier has it, 0 when they do not. '
+            f'Drops over 20% are never applied automatically. <a href="{run_url}" style="color:{RED}">Full report and downloads</a></td></tr>'
+            f'</table></td></tr></table></body></html>')
 
 if r is None:
     ok = False
     subject = f"GT Street sync FAILED {now}: no report produced"
-    body = f'<p>The daily sync did not finish and produced no report. Nothing was confirmed today. Open the run: <a href="{run_url}">{run_url}</a></p>'
+    body = shell(f'<tr><td style="padding:8px 28px 24px;font-size:15px;line-height:1.5">The sync did not finish, so nothing was confirmed today. '
+                 f'Prices and stock may not have been updated. <a href="{run_url}" style="color:{RED}">Open the run</a> to see why.</td></tr>', False, "Sync did not finish")
     text_summary = subject
 else:
     ch = r.get("price_changes", [])
@@ -61,43 +133,71 @@ else:
             w.writerow([c["variant"], f"{old:.2f}", f"{new:.2f}", f"{new-old:+.2f}", f"{(new-old)/old*100:+.1f}" if old else "", SITE + c.get("handle", "")])
     sc = r.get("stock_changes", [])
     held, errs = r.get("held", []), r.get("errors", [])
-    ups = sum(1 for c in ch if float(c["to"]) > float(c["from"]))
-    ok = status == "success" and not vfail and not errs
-    subject = (f"{'GT Street sync OK' if ok else 'GT Street sync NEEDS ATTENTION'} {now}: "
-               f"{len(ch)} price changes, {sum(1 for s in sc if s['now'] == 'Out of stock')} sold out, {sum(1 for s in sc if s['now'] == 'In stock')} back in stock")
-    sup = "".join(f"<li>{html.escape(n)}: {s['variants_matched']} variants checked, {len(s['unmatched'])} not found on their site"
-                  + (f' <b style="color:#b00">ERROR: {html.escape(str(s["error"]))}</b>' if s.get("error") else "") + "</li>"
-                  for n, s in r.get("suppliers", {}).items())
-    banner_col = "#1a7f37" if ok else "#b42318"
-    body = [f'<div style="font-family:Arial,Helvetica,sans-serif;max-width:720px;color:#111">',
-            f'<div style="background:{banner_col};color:#fff;padding:12px 16px;border-radius:6px;font-size:16px"><b>{"All checks passed" if ok else "Needs attention, see below"}</b></div>',
-            '<ul style="font-size:13px;line-height:1.6">',
-            f"<li>CNC Wheels: {r.get('cnc_pages_read', 0)} pages read live, {r.get('cnc_pages_failed', 0)} skipped (left unchanged)</li>", sup,
-            f"<li>Price changes applied: {len(ch)} ({ups} up, {len(ch) - ups} down)</li>",
-            f"<li>Stock changes applied: {len(sc)}</li>",
-            f"<li>Held for review (not changed): {len(held)}</li>",
-            f"<li>Errors: {len(errs)}</li>",
-            (f"<li>Independent re-check of {vchecked.group(1)} random products against the suppliers' websites: "
-             + (f'<b style="color:#b00">{vbad.group(1)} mismatches</b>' if vfail else "all matched") + "</li>") if vchecked else
-            '<li><b style="color:#b00">Independent re-check did not run</b></li>',
-            "</ul>"]
-    if vfail:
-        body.append('<h3 style="font-size:15px;color:#b00">Re-check mismatches</h3><ul style="font-size:13px">' +
-                    "".join(f"<li>{html.escape(x[2:])}</li>" for x in verify.splitlines() if x.startswith("- ") and ("PRICE" in x or "STOCK" in x)) + "</ul>")
-    if errs:
-        body.append('<h3 style="font-size:15px;color:#b00">Errors</h3><ul style="font-size:12px">' + "".join(f"<li>{html.escape(json.dumps(e)[:300])}</li>" for e in errs[:20]) + "</ul>")
-    body.append(table("Held for review (price NOT changed)", [row(h, f"now {money(h['current'])}<br>supplier {money(h['cnc'])}") for h in held[:50]],
-                      "Price would drop more than 20% or fall below the minimum. Check the supplier's page and change by hand if correct."))
-    big = sorted(ch, key=lambda c: abs(float(c["to"]) - float(c["from"])), reverse=True)
-    body.append(table(f"Price changes ({len(ch)})", [row(c, f"{money(c['from'])} → <b>{money(c['to'])}</b><br><span style='color:{'#1a7f37' if float(c['to']) > float(c['from']) else '#b42318'}'>{float(c['to'])-float(c['from']):+,.2f}</span>") for c in big[:150]],
-                      "Largest first." + (f" Showing 150 of {len(ch)}; the full list is in price_changes.csv on the run." if len(ch) > 150 else "")))
-    body.append(table(f"Stock changes ({len(sc)})", [row(s, f"<b style='color:{'#b42318' if s['now'] == 'Out of stock' else '#1a7f37'}'>{s['now']}</b>") for s in sc[:150]]))
     skipped = r.get("cnc_skipped_pages", [])
+    ups = sum(1 for c in ch if float(c["to"]) > float(c["from"]))
+    sold = sum(1 for s in sc if s["now"] == "Out of stock")
+    ok = status == "success" and not vfail and not errs
+    attention = bool(held or errs or vfail)
+    subject = (f"GT Street sync {now}: " + ("all good" if ok and not held else "needs attention") +
+               f", {len(ch)} price changes, {sold} sold out, {len(sc) - sold} back in stock")
+    headline = "All checks passed" if ok and not held else ("Applied, a few items need you" if ok else "Needs attention")
+    inner = []
+    lead = (f"{len(ch)} price change{'s' if len(ch) != 1 else ''} and {len(sc)} stock change{'s' if len(sc) != 1 else ''} were applied to the site."
+            if (ch or sc) else "Every supplier was checked and nothing needed changing.")
+    if vchecked:
+        lead += (f" An independent recheck of {vchecked.group(1)} random products against the supplier websites "
+                 + (f'found <b style="color:{RED}">{vbad.group(1)} mismatch{"es" if vbad and vbad.group(1) != "1" else ""}</b>.' if vfail else "matched every one."))
+    else:
+        lead += f' <b style="color:{RED}">The independent recheck did not run.</b>'
+    inner.append(f'<tr><td style="padding:6px 28px 14px;font-size:15px;line-height:1.5;color:#333">{lead}</td></tr>')
+    inner.append(f'<tr><td style="padding:0 22px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>'
+                 + tile(len(ch), "Price changes") + tile(sold, "Sold out", RED if sold else INK) + tile(len(sc) - sold, "Restocked", GREEN if len(sc) - sold else INK)
+                 + tile(len(held) + len(errs), "Need you", RED if (held or errs) else INK) + '</tr></table></td></tr>')
+
+    # 1. Things that need a person, first.
+    if vfail:
+        rows = [f'<tr><td style="padding:8px 0;border-bottom:1px solid {LINE};font-size:13px">{esc(x[2:])}</td></tr>'
+                for x in verify.splitlines() if x.startswith("- ") and ("PRICE" in x or "STOCK" in x)]
+        inner.append(section("Recheck mismatches", "The site does not match the supplier for these. Check them first.", rows))
+    if errs:
+        rows = [f'<tr><td style="padding:8px 0;border-bottom:1px solid {LINE};font-size:13px;color:#333">{esc(e if isinstance(e, str) else json.dumps(e))[:300]}</td></tr>' for e in errs[:20]]
+        inner.append(section("Errors", f"{len(errs)} error{'s' if len(errs) != 1 else ''} during the run.", rows))
+    if held:
+        g = group(held, lambda h: (round(float(h["current"]), 2), round(float(h["cnc"]), 2)))
+        rows = [item_row(h, f'<span style="color:{GREY}">site</span> {money(h["current"])}<br><span style="color:{GREY}">supplier</span> <b>{money(h["cnc"])}</b>') for h in g[:50]]
+        inner.append(section("Held for your review", f"{len(held)} price{'s' if len(held) != 1 else ''} not changed.", rows,
+                             "The supplier price would cut more than 20%, or fall under the minimum. If the supplier's page is right, update these by hand."))
+
+    # 2. What changed.
+    if ch:
+        g = group(ch, lambda c: (round(float(c["from"]), 2), round(float(c["to"]), 2)))
+        g.sort(key=lambda c: abs(float(c["to"]) - float(c["from"])), reverse=True)
+        def pc(c):
+            d = float(c["to"]) - float(c["from"]); col = GREEN if d > 0 else RED
+            return (f'<span style="color:{GREY};text-decoration:line-through;font-size:13px">{money(c["from"])}</span> '
+                    f'<b>{money(c["to"])}</b><br>{pill(("&#9650; " if d > 0 else "&#9660; ") + f"${abs(d):,.2f}", col)}')
+        more = f" Showing the largest 80 groups; every change is in price_changes.csv on the run." if len(g) > 80 else ""
+        inner.append(section("Price changes", f"{len(ch)} applied: {ups} up, {len(ch) - ups} down. Largest first.{more}", [item_row(c, pc(c)) for c in g[:80]]))
+    if sc:
+        g = group(sc, lambda s: (s["now"],))
+        g.sort(key=lambda s: s["now"] != "Out of stock")
+        rows = [item_row(s, pill(("Sold out" if s["now"] == "Out of stock" else "Back in stock"), RED if s["now"] == "Out of stock" else GREEN)) for s in g[:80]]
+        inner.append(section("Stock changes", f"{sold} sold out, {len(sc) - sold} back in stock.", rows))
+
+    # 3. Supplier check summary.
+    srows = [f'<tr><td style="padding:9px 0;border-bottom:1px solid {LINE};font-size:14px;font-weight:600">CNC Wheels</td>'
+             f'<td style="padding:9px 0;border-bottom:1px solid {LINE};font-size:13px;color:{GREY};text-align:right">{r.get("cnc_pages_read", 0):,} pages read live'
+             + (f', {len(skipped)} skipped' if skipped else "") + "</td></tr>"]
+    for n, s_ in r.get("suppliers", {}).items():
+        state = f'<span style="color:{RED};font-weight:700">could not be read</span>' if s_.get("error") else f'{s_["variants_matched"]:,} checked' + (f', {len(s_["unmatched"])} not on their site' if s_["unmatched"] else "")
+        srows.append(f'<tr><td style="padding:9px 0;border-bottom:1px solid {LINE};font-size:14px;font-weight:600">{esc(n)}</td>'
+                     f'<td style="padding:9px 0;border-bottom:1px solid {LINE};font-size:13px;color:{GREY};text-align:right">{state}</td></tr>')
+    inner.append(section("Suppliers checked", "Every price and stock level read directly from each supplier's own website.", srows))
     if skipped:
-        body.append(f'<h3 style="font-size:15px;margin:22px 0 6px">CNC pages skipped ({len(skipped)}), left unchanged</h3><ul style="font-size:12px">' +
-                    "".join(f'<li><a href="{html.escape(x["url"])}">{html.escape(x["url"].rstrip("/").split("/")[-1])}</a>: {html.escape(x["why"])}</li>' for x in skipped[:40]) + "</ul>")
-    body.append(f'<p style="font-size:12px;color:#666;margin-top:24px">Full report: <a href="{run_url}">{run_url}</a></p></div>')
-    body = "".join(body)
+        rows = [f'<tr><td style="padding:7px 0;border-bottom:1px solid {LINE};font-size:12px"><a href="{esc(x["url"])}" style="color:{INK}">{esc(x["url"].rstrip("/").split("/")[-1].replace("-", " "))}</a>'
+                f'<div style="color:{GREY}">{esc(x["why"])}</div></td></tr>' for x in skipped[:25]]
+        inner.append(section("CNC pages skipped", f"{len(skipped)} left unchanged today; they are read again tomorrow.", rows))
+    body = shell("".join(inner), ok and not held, headline)
     text_summary = subject
 
 if os.environ.get("TEST_EMAIL"):
@@ -131,8 +231,9 @@ except Exception as e:
 
 if os.environ.get("TEST_EMAIL"):
     raise SystemExit(0 if sent else "Test email was NOT sent; see the error above.")
-# Backup: GitHub issue (GitHub emails and notifies the repo owner).
-if os.environ.get("GH_TOKEN"):
+# Backup only if the email failed: a GitHub issue (GitHub emails and notifies the repo owner). The repo is public,
+# so issues are not opened on normal days.
+if os.environ.get("GH_TOKEN") and not sent:
     note = "" if sent else "\n\n**The email was NOT sent. Check the email secrets.**"
     md = re.sub(r"<br>", " ", body); md = re.sub(r"<[^>]+>", " ", md); md = re.sub(r"[ \t]+", " ", md)
     issue = f"@{owner} {html.unescape(md)[:60000]}{note}\n\n{run_url}"
@@ -149,4 +250,4 @@ if os.environ.get("GH_TOKEN"):
         for i in json.loads(out or "[]"):
             if not new or str(i["number"]) != new.group(1): subprocess.run(["gh", "issue", "close", str(i["number"])], capture_output=True)
 
-open("email.html", "w").write(f"<h2>{html.escape(subject)}</h2>" + body)
+open("email.html", "w").write(body)

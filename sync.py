@@ -451,10 +451,10 @@ def main():
         new_price = round(src_price - offset, 2)
         if abs(new_price - v["price"]) >= 0.01:
             if new_price < floor or (v["price"] > 0 and new_price < v["price"] * (1 - MAX_DROP)):
-                report["held"].append({"variant": name, "id": v["id"], "current": v["price"], "cnc": src_price, "image": p.get("image", ""), "handle": p.get("handle", "")})
+                report["held"].append({"variant": name, "product": p["title"], "id": v["id"], "current": v["price"], "cnc": src_price, "image": p.get("image", ""), "handle": p.get("handle", "")})
             else:
                 inp["price"] = f"{new_price:.2f}"
-                report["price_changes"].append({"variant": name, "from": v["price"], "to": new_price, "image": p.get("image", ""), "handle": p.get("handle", "")})
+                report["price_changes"].append({"variant": name, "product": p["title"], "from": v["price"], "to": new_price, "image": p.get("image", ""), "handle": p.get("handle", "")})
         own = OWN_STOCK_TAG in [t.lower() for t in p.get("tags", [])]
         if src_out is not None and not own and v["item"]:
             if v["tracked"] is not True or v["policy"] != "DENY":
@@ -462,7 +462,7 @@ def main():
             stock_targets[v["item"]] = 0 if src_out else STOCK_QTY
             was_in = (v.get("qty") or 0) > 0 and v["tracked"] is True
             if was_in == src_out:  # an actual change today
-                report.setdefault("stock_changes", []).append({"variant": name, "now": "Out of stock" if src_out else "In stock",
+                report.setdefault("stock_changes", []).append({"variant": name, "product": p["title"], "now": "Out of stock" if src_out else "In stock",
                                                                "image": p.get("image", ""), "handle": p.get("handle", "")})
             (report["sold_out"] if src_out else report["back_in_stock"]).append(name)
         if v["id"] in sku_set:
