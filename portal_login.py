@@ -97,10 +97,13 @@ def sign_in(portal, user, password):
         fields["RememberMe"] = "true"
     target = urllib.parse.urljoin(page_url, action or page_url)
     landed, body = _post(opener, target, fields)
-    if "password" in body.lower() and ("invalid" in body.lower() or "incorrect" in body.lower()):
-        raise RuntimeError(f"{portal}: sign-in rejected (check the secret values)")
-    if landed.rstrip("/") == page_url.rstrip("/") and cfg["pass_field"].lower() in body.lower():
-        raise RuntimeError(f"{portal}: still on the sign-in page after posting")
+    # Diagnose without printing content: where we landed, whether the sign-in form is still shown,
+    # and how many validation or error blocks are present.
+    form_still_shown = any(cfg["pass_field"] in html_part for html_part in [body])
+    errors = len(re.findall(r'validation-summary|alert-danger|field-validation-error|error-message', body, re.I))
+    path = urllib.parse.urlsplit(landed).path or "/"
+    if form_still_shown:
+        raise RuntimeError(f"{portal}: still on the sign-in form after posting (landed on {path}, error blocks: {errors})")
     return opener, landed, body
 
 
