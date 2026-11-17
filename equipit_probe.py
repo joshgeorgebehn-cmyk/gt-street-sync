@@ -24,18 +24,29 @@ def main():
         page = browser.new_page()
         page.goto(HOME, wait_until="networkidle", timeout=60000)
 
-        # Open the sign-in form from whichever control offers it.
-        opened = False
-        for locator in [
-            page.get_by_role("button", name=re.compile(r"log ?in|sign ?in", re.I)),
-            page.get_by_role("link", name=re.compile(r"log ?in|sign ?in", re.I)),
-        ]:
-            if locator.count():
-                locator.first.click()
-                opened = True
+        # Privacy first: decline optional cookies if a banner offers it, otherwise leave it alone.
+        for name in [r"reject", r"decline", r"necessary only", r"only necessary"]:
+            btn = page.get_by_role("button", name=re.compile(name, re.I))
+            for i in range(btn.count()):
+                if btn.nth(i).is_visible():
+                    btn.nth(i).click(timeout=5000)
+                    page.wait_for_timeout(1000)
+                    break
+
+        # Click the first VISIBLE sign-in control (the page may hold hidden copies).
+        clicked = False
+        for role in ("button", "link"):
+            controls = page.get_by_role(role, name=re.compile(r"log ?in|sign ?in", re.I))
+            for i in range(controls.count()):
+                c = controls.nth(i)
+                if c.is_visible():
+                    c.click(timeout=15000)
+                    clicked = True
+                    break
+            if clicked:
                 break
-        if not opened:
-            sys.exit("equipit: no sign-in control found on the home page")
+        if not clicked:
+            sys.exit("equipit: no visible sign-in control found on the home page")
 
         try:
             page.wait_for_selector("input[type=password]", timeout=20000)

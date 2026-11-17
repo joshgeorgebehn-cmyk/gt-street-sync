@@ -60,6 +60,13 @@ def _opener():
     return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar)), jar
 
 
+def jar_of(opener):
+    for h in opener.handlers:
+        if isinstance(h, urllib.request.HTTPCookieProcessor):
+            return h.cookiejar
+    return []
+
+
 def _get(opener, url):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with opener.open(req, timeout=60) as r:
@@ -103,8 +110,25 @@ def sign_in(portal, user, password):
     errors = len(re.findall(r'validation-summary|alert-danger|field-validation-error|error-message', body, re.I))
     path = urllib.parse.urlsplit(landed).path or "/"
     if form_still_shown:
-        raise RuntimeError(f"{portal}: still on the sign-in form after posting (landed on {path}, error blocks: {errors})")
+        cookies = sorted({c.name for c in jar_of(opener)})
+        raise RuntimeError(
+            f"{portal}: still on the sign-in form after posting (landed on {path}, error blocks: {errors}, "
+            f"messages: {error_texts(body)}, cookie names set: {cookies})"
+        )
     return opener, landed, body
+
+
+def error_texts(body, limit=3, width=120):
+    """Short text of error or validation blocks, for diagnosis. Portal messages only, no page content."""
+    out = []
+    for m in re.finditer(r'<([a-z]+)[^>]*class="[^"]*(?:validation-summary|alert-danger|field-validation-error|error-message)[^"]*"[^>]*>(.*?)</\1>', body, re.I | re.S):
+        text = re.sub(r"<[^>]+>", " ", m.group(2))
+        text = re.sub(r"\s+", " ", text).strip()
+        if text:
+            out.append(text[:width])
+        if len(out) >= limit:
+            break
+    return out
 
 
 def probe(html):
