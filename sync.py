@@ -47,7 +47,7 @@ CNC_SET_SKU = os.environ.get("CNC_SET_SKU", "1") == "1"
 # and are never given supplier quantities.
 STOCK_QTY = int(os.environ.get("STOCK_QTY", "20"))
 OWN_STOCK_TAG = os.environ.get("OWN_STOCK_TAG", "own-stock").lower()
-MAX_DROP = float(os.environ.get("MAX_DROP", "1"))  # 1 = apply every drop; e.g. 0.30 holds drops over 30% for review
+MAX_DROP = float(os.environ.get("MAX_DROP", "0.20"))  # a drop of more than 20% overnight is held for a person to check
 CNC_DELAY = float(os.environ.get("CNC_DELAY", "0.8"))
 CNC_WORKERS = int(os.environ.get("CNC_WORKERS", "2"))
 VENDORS = ("GT Form", "JSR", "Black Rock")
@@ -213,12 +213,49 @@ def cnc_index():
             idx[(norm(" ".join(toks[:k])), f"{d}x{w}", pcd)] = loc
     return idx
 
+CNC_PARSER_VERSION = 2
+
+def _money(x):
+    try:
+        return float(x.replace(",", ""))
+    except Exception:
+        return None
+
+def cnc_price(t):
+    """The price CNC is actually selling this wheel for, per wheel, or (None, reason).
+
+    Two independent readings must agree, otherwise the page is skipped and the variant is left unchanged:
+      1. the price shown in the product summary under the title (the <ins> sale price if the wheel is on sale,
+         otherwise the single price), and
+      2. WooCommerce's own structured data: the offer's PriceSpecification price (not the ListPrice).
+    CNC pages also carry a second, stale "Schema Pro" block with an out of date price (e.g. $425 when the wheel
+    sells for $460). Version 1 of this parser read that block, which priced wheels too low. It is never used.
+    """
+    shown = None
+    m = re.search(r'class="product_title entry-title".*?<p class="price">(.*?)</p>', t, re.S)
+    if m:
+        block = m.group(1)
+        ins = re.search(r"<ins[^>]*>(.*?)</ins>", block, re.S)
+        part = ins.group(1) if ins else block
+        amts = re.findall(r"woocommerce-Price-amount amount\"><bdi>.*?</span>\s*([\d,]+(?:\.\d+)?)", part, re.S)
+        if len(amts) == 1 or (ins and amts):
+            shown = _money(amts[0])
+    if shown is None:
+        m = re.search(r"Current price is:\s*\$([\d,]+(?:\.\d+)?)", t)
+        if m: shown = _money(m.group(1))
+    struct = None
+    m = re.search(r'"@type":"PriceSpecification","price":"([\d.]+)"', t)
+    if m: struct = _money(m.group(1))
+    if shown is None and struct is None: return None, "no price found"
+    if shown is None or struct is None: return None, f"only one price reading (shown {shown}, structured {struct})"
+    if abs(shown - struct) > 0.5: return None, f"price readings disagree (shown {shown}, structured {struct})"
+    return shown, ""
+
 def cnc_page(url):
     st, t = http(url)
     time.sleep(CNC_DELAY)
     if st != 200 or not t: return {"ok": False, "status": st}
-    m = re.search(r'"offers":\s*\{[^}]*"price":\s*"?([\d.]+)', t)
-    price = float(m.group(1)) if m else None
+    price, why = cnc_price(t)
     attrs = {}
     tab = re.search(r"woocommerce-product-attributes(.*?)</table>", t, re.S)
     if tab:
@@ -229,7 +266,8 @@ def cnc_page(url):
     offsets = [o.strip().replace(" ", "") for o in attrs.get("offset", "").split(",") if o.strip()]
     offsets = [("+" + o) if re.match(r"^\d", o) else o for o in offsets]
     msku = re.search(r'class="sku">\s*([^<\s][^<]*?)\s*<', t)
-    return {"ok": price is not None, "price": price, "out": stock.lower() == "out of stock", "sku": msku.group(1).strip() if msku else "",
+    return {"ok": price is not None, "price": price, "why": why, "v": CNC_PARSER_VERSION,
+            "out": stock.lower() == "out of stock", "sku": msku.group(1).strip() if msku else "",
             "backorder": "back-order" in stock.lower() or "backorder" in stock.lower(), "offsets": offsets}
 
 
@@ -337,7 +375,7 @@ def main():
     pages, to_read = {}, []
     for u in urls:
         c = cache.get(u)
-        if c and c.get("ok") and "sku" in c and c.get("lastmod") and c["lastmod"] == CNC_LASTMOD.get(u) and now - c.get("at", 0) < max_age * 86400:
+        if c and c.get("ok") and c.get("v") == CNC_PARSER_VERSION and "sku" in c and c.get("lastmod") and c["lastmod"] == CNC_LASTMOD.get(u) and now - c.get("at", 0) < max_age * 86400:
             pages[u] = c
         else:
             to_read.append(u)

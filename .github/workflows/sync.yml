@@ -64,7 +64,7 @@ jobs:
           DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
-          MAX_DROP: ${{ vars.MAX_DROP || '1' }}
+          MAX_DROP: ${{ vars.MAX_DROP || '0.20' }}
           JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
           ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
         run: python3 sync.py
@@ -85,7 +85,7 @@ jobs:
           DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '1' || '0' }}
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
-          MAX_DROP: ${{ vars.MAX_DROP || '1' }}
+          MAX_DROP: ${{ vars.MAX_DROP || '0.20' }}
           JJ_MIN_PRICE: ${{ vars.JJ_MIN_PRICE || '5' }}
           ONLY: ${{ inputs.only || steps.gate.outputs.only || '' }}
         run: python3 channels.py
