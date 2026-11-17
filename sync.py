@@ -32,7 +32,7 @@ Credentials (GitHub Actions secrets, never in code):
   SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET  for apps that use the client credentials grant.
 """
 import uuid, os, re, json, time, gzip, html, sys, datetime, concurrent.futures as cf
-import urllib.request, urllib.error, urllib.parse
+import urllib.request, urllib.parse, urllib.error, urllib.parse
 from norm import norm
 
 API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-10")
@@ -483,17 +483,21 @@ def main():
     disc = []  # (product, variant, name)
     cands = [(p, v) for p in products for v in p["variants"] if v["id"] not in matched_ids and v["sku"].upper().startswith("ITM")]
     if cands and cnc_healthy:
-        bases = sorted({v["sku"].split("-")[0].upper() for _, v in cands})
+        def base_of(sku):  # strip only GT Street's offset suffix (-P40, -M12, -P0); CNC codes carry their own dashes
+            return re.sub(r"-[PM]\d+(?:\.\d+)?$", "", sku.strip()).upper()
+        bases = sorted({base_of(v["sku"]) for _, v in cands})
         def on_cnc(b):
-            st_, t_ = http(f"https://cncwheels.com.au/wp-json/wc/store/v1/products?search={b}")
+            """True: CNC still sells this exact code. False: CNC's shop has nothing for it. None: can't tell, leave alone."""
+            st_, t_ = http(f"https://cncwheels.com.au/wp-json/wc/store/v1/products?search={urllib.parse.quote(b)}")
             if st_ != 200: return None
             try: items = json.loads(t_)
             except Exception: return None
-            return any((x.get("sku") or "").upper() == b for x in items)
+            if any((x.get("sku") or "").upper() == b for x in items): return True
+            return False if not items else None
         with cf.ThreadPoolExecutor(CNC_WORKERS) as ex:
             exists = dict(zip(bases, ex.map(on_cnc, bases)))
         for p, v in cands:
-            e = exists.get(v["sku"].split("-")[0].upper())
+            e = exists.get(base_of(v["sku"]))
             name = f"{p['title']} {v['opts'].get('Rim Size')} {v['opts'].get('PCD')} {v['opts'].get('Offset')}"
             if e is False: disc.append((p, v, name))
             elif e is True: report.setdefault("disc_not_confirmed", []).append(f"{name}: still on CNC under a different page")
