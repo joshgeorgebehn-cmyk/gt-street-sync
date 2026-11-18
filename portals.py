@@ -242,12 +242,52 @@ def read_nyc(prods=None):
     except Exception as e:
         NYC_DIAG["wheelsearch_error"] = f"{type(e).__name__}: {str(e)[:150]}"
     try:
-        more_rows = nyc_matrix(op, cfg)
+        more_rows = nyc_size_searches(op, cfg, prods or [])
         if len(more_rows) > len(rows):
             rows = more_rows
     except Exception as e:
-        NYC_DIAG["matrix_error"] = f"{type(e).__name__}: {str(e)[:150]}"
+        NYC_DIAG["size_search_error"] = f"{type(e).__name__}: {str(e)[:150]}"
+    if os.environ.get("NYC_MATRIX") == "1":
+        try:
+            nyc_matrix(op, cfg)
+        except Exception as e:
+            NYC_DIAG["matrix_error"] = f"{type(e).__name__}: {str(e)[:150]}"
     return rows
+
+
+def nyc_size_searches(op, cfg, prods):
+    """The portal's quick search takes a wheel size (for example 17x9) and lists every wheel of that size with its stock.
+    Run it once for each rim size we sell and merge the rows by product code."""
+    import time
+    _, ws = pl._get(op, cfg["home"] + "/WheelSearch/")
+    qf = form_fields(ws, "/WheelSearch/QuickSearch") or {}
+    sizes = sorted({(v["opts"].get("Rim Size") or "").strip().lower() for p in prods for v in p["variants"]} - {""})
+    log, out, seen, start = [], [], set(), time.time()
+    for sz in sizes:
+        if time.time() - start > 1800:
+            log.append({"stopped_for_time": True})
+            break
+        f = dict(qf)
+        f["SearchQuery"] = sz
+        req = urllib.request.Request(cfg["home"] + "/WheelSearch/QuickSearch", data=urllib.parse.urlencode(f).encode(),
+                                     headers={"User-Agent": pl.UA, "Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            with op.open(req, timeout=300) as r:
+                body = r.read().decode("utf-8", "replace")
+        except Exception as e:
+            log.append({"size": shape(sz), "error": f"{type(e).__name__}: {str(e)[:60]}"})
+            continue
+        got = parse_nyc_rows(body)
+        new = 0
+        for r in got:
+            if r["code"] not in seen:
+                seen.add(r["code"])
+                out.append(r)
+                new += 1
+        log.append({"size": shape(sz), "rows": len(got), "new": new})
+    NYC_DIAG["size_searches"] = log
+    NYC_DIAG["sizes_wanted"] = len(sizes)
+    return out
 
 
 def nyc_matrix(op, cfg):
