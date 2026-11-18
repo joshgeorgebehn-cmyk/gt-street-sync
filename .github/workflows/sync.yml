@@ -114,6 +114,7 @@ jobs:
           EQUIPIT_USER: ${{ secrets.EQUIPIT_USER }}
           EQUIPIT_PASS: ${{ secrets.EQUIPIT_PASS }}
           PORTALS_APPLY: ${{ inputs.dry_run && '0' || vars.PORTALS_APPLY || '0' }}
+          TD_PRICES_APPLY: ${{ inputs.dry_run && '0' || vars.TD_PRICES_APPLY || '0' }}
           EQUIPIT_VENDORS: ${{ vars.EQUIPIT_VENDORS || 'Tough Dog' }}
         run: |
           python3 -m pip install -q playwright && python3 -m playwright install --with-deps chromium > /dev/null
