@@ -65,6 +65,40 @@ def kit_codes(sku):
     return out
 
 
+def code_candidates(sku):
+    """Ways our SKU may appear at a supplier, most specific first: as is; without quantity marks such as (2);
+    with vehicle suffixes removed one at a time (FC41232-PX3 -> FC41232, TDGS-386/1-PJPK -> TDGS-386/1)."""
+    s0 = (sku or "").strip()
+    if not s0:
+        return []
+    s1 = re.sub(r"\(\d+\)", "", s0)
+    out = [s0, s1]
+    parts = s1.split("-")
+    for i in range(len(parts) - 1, 0, -1):
+        out.append("-".join(parts[:i]))
+    seen, res = set(), []
+    for x in out:
+        k = code_norm(x)
+        if len(k) >= 4 and k not in seen:
+            seen.add(k)
+            res.append(x)
+    return res
+
+
+def lookup(stock, sku):
+    """(value, how) from a {normalised code: value} map using code_candidates and kit expansion."""
+    for c in code_candidates(sku):
+        hit = stock.get(code_norm(c))
+        if hit is not None:
+            return hit, ("exact" if code_norm(c) == code_norm(sku) else "suffix")
+        parts = kit_codes(c)
+        if parts:
+            vals = [stock.get(code_norm(x)) for x in parts]
+            if all(v is not None for v in vals):
+                return vals, "kit"
+    return None, None
+
+
 def state_from_qty(qty, sellable_when_out=False):
     """(state, quantity) in the same model as sync.py."""
     q = int(qty or 0)
@@ -358,12 +392,12 @@ def main():
         states, unmatched_skus, kits = [], [], 0
         for p in prods:
             for v in p["variants"]:
-                hit = stock.get(code_norm(v["sku"])) if v["sku"] else None
-                if hit is None and v["sku"]:
-                    parts = [stock.get(code_norm(x)) for x in kit_codes(v["sku"])]
-                    if parts and all(x is not None for x in parts):
-                        hit = (min(x[0] for x in parts), any(x[1] for x in parts))
-                        kits += 1
+                hit, how = lookup(stock, v["sku"]) if v["sku"] else (None, None)
+                if how == "kit":
+                    hit = (min(x[0] for x in hit), any(x[1] for x in hit))
+                    kits += 1
+                elif how == "suffix":
+                    rep["suffix_matched"] = rep.get("suffix_matched", 0) + 1
                 if hit is None:
                     rep["unmatched"] += 1
                     unmatched_skus.append(v["sku"])
