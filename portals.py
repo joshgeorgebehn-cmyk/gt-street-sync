@@ -197,16 +197,22 @@ def read_nyc():
                                            re.findall(r'<select[^>]*name="([^"]+)"[^>]*>(.*?)</select>', ws, re.S | re.I)}
         brands = {n.lower(): v for v, n in re.findall(r'<option[^>]*value="([^"]*)"[^>]*>\s*([^<]+?)\s*</option>', ws)}
         NYC_DIAG["brands_listed"] = sorted(b for b in brands if any(w.lower() in b for w in NYC_VENDORS))
-        qf = form_fields(ws, "/WheelSearch/QuickSearch") or form_fields(page, "/WheelSearch/QuickSearch") or {}
+        ef = form_fields(ws, "/WheelSearch/SearchElements") or {}
+        bsel = re.search(r'<select[^>]*name="Brand"[^>]*>(.*?)</select>', ws, re.S | re.I)
+        bopts = {n.strip().lower(): v for v, n in re.findall(r'<option[^>]*value="([^"]*)"[^>]*>\s*([^<]+?)\s*</option>', bsel.group(1))} if bsel else {}
         found = []
         for vend in NYC_VENDORS:
-            f = dict(qf)
-            f["SearchQuery"] = vend
-            req = urllib.request.Request(cfg["home"] + "/WheelSearch/QuickSearch", data=urllib.parse.urlencode(f).encode(),
+            f = {k: v for k, v in ef.items() if k not in ("Brand",)}
+            f["Brand"] = bopts.get(vend.lower(), vend)
+            req = urllib.request.Request(cfg["home"] + "/WheelSearch/SearchElements", data=urllib.parse.urlencode(f).encode(),
                                          headers={"User-Agent": pl.UA, "Content-Type": "application/x-www-form-urlencoded"})
-            with op.open(req, timeout=300) as r:
-                body = r.read().decode("utf-8", "replace")
-                landed = urllib.parse.urlsplit(r.geturl()).path
+            try:
+                with op.open(req, timeout=300) as r:
+                    body = r.read().decode("utf-8", "replace")
+                    landed = urllib.parse.urlsplit(r.geturl()).path
+            except Exception as e:
+                NYC_DIAG.setdefault("brand_searches", []).append({"brand": vend, "error": f"{type(e).__name__}: {str(e)[:80]}"})
+                continue
             got = parse_nyc_rows(body)
             NYC_DIAG.setdefault("brand_searches", []).append({"brand": vend, "landed": landed, "rows": len(got), "bytes": len(body),
                 "desc_shapes": [re.sub(r"[A-Za-z]", "x", re.sub(r"\d", "9", x["desc"]))[:50] for x in got[:3]],
@@ -276,6 +282,7 @@ EQ_API = "https://store-api.unleashedsoftware.com/api"
 EQ_DIAG = {}
 EQ_PRICE_IDS = set()
 EQ_IDS = {}
+EQ_BUY = {}  # normalised code -> unit buy price (ex GST), for the margin floor only; never published
 EQ_WANT_PRICES = []  # set by main before reading: our (sku, price) pairs, for a ratio check only
 
 
@@ -350,14 +357,17 @@ def read_equipit():
         # Ratio check for up to 150 of our products: our price / Equipit unitPrice and / discountedUnitPrice.
         try:
             pairs = [(EQ_IDS.get(code_norm(c)), price) for sku, price in EQ_WANT_PRICES for c in code_candidates(sku)[:1]]
-            pairs = [(i, p) for i, p in pairs if i and p][:150]
+            pairs = [(i, p) for i, p in pairs if i and p][:600]
             ratios_u, ratios_d = [], []
             for k in range(0, len(pairs), 50):
                 chunk = pairs[k:k + 50]
                 pr = page.request.post(f"{EQ_API}/products/prices", data={"productIds": [i for i, _ in chunk]}, headers=headers, timeout=90000)
                 pm = {x.get("productId"): (x.get("prices") or [{}])[0] for x in ((pr.json() or {}).get("model") or {}).get("products") or []}
+                ids_to_code = {v: k for k, v in EQ_IDS.items()}
                 for i, ours in chunk:
                     e = pm.get(i) or {}
+                    if e.get("discountedUnitPrice") and i in ids_to_code:
+                        EQ_BUY[ids_to_code[i]] = float(e["discountedUnitPrice"])
                     if e.get("unitPrice"): ratios_u.append(ours / float(e["unitPrice"]))
                     if e.get("discountedUnitPrice"): ratios_d.append(ours / float(e["discountedUnitPrice"]))
             med = lambda xs: round(sorted(xs)[len(xs) // 2], 3) if xs else None
@@ -367,6 +377,77 @@ def read_equipit():
             EQ_DIAG["ratio_error"] = f"{type(e).__name__}: {str(e)[:120]}"
         b.close()
     return out
+
+
+# ---------------------------------------------------------------- Tough Dog price guide
+PRICE_GUIDE_STORE = os.environ.get("TD_PRICE_STORE", "https://ppdperformance.com.au")
+PRICE_GUIDE_PATH = os.environ.get("TD_PRICE_PATH", "/collections/tough-dog-lift-kits/products.json")
+PRICE_OFFSET = float(os.environ.get("PRICE_OFFSET", "1"))
+MIN_PRICE = float(os.environ.get("MIN_PRICE", "10"))
+MIN_MARGIN = float(os.environ.get("TD_MIN_MARGIN", "0.10"))  # never below buy price + GST + this margin
+MAX_SWING = float(os.environ.get("TD_MAX_SWING", "0.35"))    # bigger moves are held for review (pair vs single etc.)
+
+
+def read_price_guide():
+    """{normalised code: lowest current price} for Tough Dog items in the guide store. Codes are indexed both as
+    listed and without a leading TD prefix (the store lists TD-FC41130B for Tough Dog FC41130B)."""
+    out, page = {}, 1
+    while page < 60:
+        req = urllib.request.Request(f"{PRICE_GUIDE_STORE}{PRICE_GUIDE_PATH}?limit=250&page={page}", headers={"User-Agent": pl.UA})
+        with urllib.request.urlopen(req, timeout=90) as r:
+            ps = json.loads(r.read().decode("utf-8", "replace")).get("products", [])
+        if not ps:
+            break
+        for p in ps:
+            if "tough" not in (p.get("vendor") or "").lower():
+                continue
+            for v in p["variants"]:
+                raw = (v.get("sku") or "").strip()
+                if not raw or re.search(r"\bx\s*\d", raw, re.I):  # skip multi-pack variants such as "x2"
+                    continue
+                price = float(v.get("price") or 0)
+                if price <= 0:
+                    continue
+                k = code_norm(raw)
+                for key in {k, k[2:] if k.startswith("TD") and len(k) > 5 else k}:
+                    out[key] = min(price, out.get(key, price))
+        page += 1
+    return out
+
+
+def price_plan(prods, guide, buy, rep):
+    """Review the guide price less PRICE_OFFSET for each matched Tough Dog variant. Moves bigger than MAX_SWING, and
+    prices that would break the margin floor, are held rather than proposed."""
+    plan = []
+    for p in prods:
+        for v in p["variants"]:
+            if not v["sku"]:
+                continue
+            hit, how = lookup(guide, v["sku"])
+            if hit is None or how == "kit":
+                continue
+            rep["price_matched"] += 1
+            want = round(max(MIN_PRICE, hit - PRICE_OFFSET), 2)
+            floor = None
+            b, _ = lookup(buy, v["sku"])
+            if b and not isinstance(b, list):
+                floor = round(b * 1.1 * (1 + MIN_MARGIN), 2)
+            cur = v["price"]
+            name = f"{p['title']}"
+            if abs(want - cur) < 0.01:
+                continue
+            if floor and want < floor:
+                rep["price_held"].append({"product": name, "now": cur, "guide": hit, "why": "below the margin floor"})
+                continue
+            if cur > 0 and abs(want - cur) / cur > MAX_SWING:
+                rep["price_held"].append({"product": name, "now": cur, "guide": hit, "why": f"move over {int(MAX_SWING * 100)}% (check pair or single)"})
+                continue
+            plan.append((p, v, want))
+            if len(rep["price_examples"]) < EXAMPLES:
+                rep["price_examples"].append({"product": name, "from": cur, "to": want, "handle": p.get("handle", "")})
+    rep["price_would_change"] = len(plan)
+    rep["price_held"] = rep["price_held"][:EXAMPLES]
+    return plan
 
 
 # ---------------------------------------------------------------- compare and apply
@@ -472,6 +553,29 @@ def main():
     except Exception as e:
         rep["error"] = f"{type(e).__name__}: {str(e)[:200]}"
 
+    # Tough Dog prices: competitor guide less $1, with a margin floor from the Equipit buy price.
+    rep = result["portals"]["Equipit"]
+    rep.update({"price_matched": 0, "price_would_change": 0, "price_examples": [], "price_held": []})
+    price_updates = []
+    try:
+        guide = read_price_guide()
+        rep["price_guide"] = {"store": PRICE_GUIDE_STORE, "codes": len(guide)}
+        tprods = [p for v in EQUIPIT_VENDORS for p in sync.shopify_products(f'vendor:"{v}"')]
+        price_updates = price_plan(tprods, guide, EQ_BUY, rep)
+    except Exception as e:
+        rep["price_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+
+    if APPLY and price_updates and os.environ.get("TD_PRICES_APPLY", "0") == "1":
+        by_p = {}
+        for p, v, want in price_updates:
+            by_p.setdefault(p["id"], []).append({"id": v["id"], "price": f"{want:.2f}"})
+        for pid, vs in by_p.items():
+            try:
+                sync.gql(sync.BULK_M, {"pid": pid, "v": vs})
+            except Exception as e:
+                rep.setdefault("price_apply_errors", []).append(str(e)[:150])
+        rep["prices_applied"] = len(price_updates)
+
     if APPLY and (all_targets or all_policies):
         report = {"errors": []}
         by_product = {}
@@ -495,6 +599,9 @@ def main():
         if r["ok"] or r["matched"]:
             lines.append(f"- {name}: {r['rows']} portal products read, {r['matched']} of our variants matched, "
                          f"{r['would_change']} stock differences" + (f" (not applied: {r['error']})" if r["error"] else ""))
+            if "price_matched" in r:
+                lines.append(f"  - Tough Dog price guide: {r['price_matched']} matched, {r['price_would_change']} price changes proposed, "
+                             f"{len(r['price_held'])} held for review" + (f" ({r['price_error']})" if r.get("price_error") else ""))
         else:
             lines.append(f"- {name}: could not be read ({r['error']})")
     open("portals.md", "w").write("\n".join(lines) + "\n")

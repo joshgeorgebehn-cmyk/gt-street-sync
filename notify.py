@@ -406,6 +406,16 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
                 prow.append(pair_row(esc(pname), f'<span style="color:{RED}">Could not be read: {esc(r.get("error") or "unknown")}</span>'))
             for ex in (r.get("examples") or [])[:12]:
                 prow.append(text_row(f'{ex.get("product")} {ex.get("variant")}: site shows {ex.get("now")}, portal shows {ex.get("portal")}'))
+            if "price_matched" in r:
+                g = r.get("price_guide") or {}
+                prow.append(pair_row("Tough Dog prices", esc(
+                    f'{r.get("price_matched", 0):,} matched to the price guide ({g.get("store", "competitor")}), '
+                    f'{r.get("price_would_change", 0):,} changes proposed, {len(r.get("price_held") or []):,} held for review'
+                    + (f'. {r["price_error"]}' if r.get("price_error") else ""))))
+                for ex in (r.get("price_examples") or [])[:12]:
+                    prow.append(text_row(f'{ex.get("product")}: {money(ex.get("from"))} to {money(ex.get("to"))}'))
+                for ex in (r.get("price_held") or [])[:8]:
+                    prow.append(text_row(f'Held: {ex.get("product")}: site {money(ex.get("now"))}, guide {money(ex.get("guide"))} ({ex.get("why")})', AMBER))
         note = ("Stock from the dealer portals was applied." if applied else
                 "Review mode: the portals were read and compared, nothing was changed. These are the differences that would be applied.")
         inner.append(section("Dealer portals", note, prow))
