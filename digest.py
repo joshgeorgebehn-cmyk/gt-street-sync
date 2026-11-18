@@ -36,6 +36,20 @@ def gate(cron: str, hours: list[int], started: dt.datetime | None = None) -> boo
     return scheduled_moment(cron, started).astimezone(SYD).hour in hours
 
 
+EXTERNAL_TITLE = "Scheduled check"
+
+
+def external_run_recent(hours: float = 5.0) -> bool:
+    """True if the external timer already started a check lately, so the late GitHub cron backup must not run a second one."""
+    try:
+        out = json.loads(gh("api", f"repos/{repo()}/actions/workflows/sync.yml/runs?event=workflow_dispatch&per_page=20"))
+    except Exception:
+        return False  # fail open: a backup that cannot check still runs
+    now = dt.datetime.now(UTC)
+    return any((r.get("display_title") or "").startswith(EXTERNAL_TITLE)
+               and (now - parse(r["created_at"])).total_seconds() < hours * 3600 for r in out.get("workflow_runs", []))
+
+
 def gh(*args: str) -> str:
     p = subprocess.run(["gh", *args], capture_output=True, text=True)
     if p.returncode:
@@ -90,6 +104,12 @@ def classify(runs: list[dict], now: dt.datetime, report_check=has_report) -> lis
             s = slot_for(r, today)
             if s:
                 found[s].append(r)
+        elif r["event"] == "workflow_dispatch" and (r.get("display_title") or "").startswith(EXTERNAL_TITLE):
+            s = slot_for(r, today)  # the external timer's runs count as the scheduled checks
+            if s:
+                found[s].append(r)
+            else:
+                manual.append(r)
         elif r["event"] == "workflow_dispatch":
             manual.append(r)
 
@@ -156,7 +176,11 @@ if __name__ == "__main__":
         if os.environ.get("GITHUB_EVENT_NAME", "schedule") != "schedule":
             print("go=true")
         else:
-            print("go=" + ("true" if gate(sys.argv[2], [int(h) for h in sys.argv[3:]]) else "false"))
+            ok = gate(sys.argv[2], [int(h) for h in sys.argv[3:]])
+            if ok and external_run_recent():
+                print("The external timer already started this check; the GitHub backup stands down.", file=sys.stderr)
+                ok = False
+            print("go=" + ("true" if ok else "false"))
     elif cmd == "sent":
         print("sent=" + ("true" if already_sent(sys.argv[2]) else "false"))
     elif cmd == "collect":

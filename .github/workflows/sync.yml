@@ -1,4 +1,5 @@
 name: Supplier price and stock sync
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.source == 'scheduler' && 'Scheduled check (external timer)' || 'Supplier price and stock sync' }}
 
 # 1am and 12pm Sydney every day: each full run covers every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
 # is read live from its own website, nothing cached, and the results are applied to Shopify. Then an independent
@@ -18,9 +19,14 @@ on:
         description: "Leave blank to run every supplier (normal). For a test of one supplier only, type e.g. cnc, xforce, or portals (dealer portals only)."
         type: string
         default: ""
+      source:
+        description: "Set to scheduler only by the external timer (cron-job.org). Leave blank for a manual run."
+        type: string
+        default: ""
 
 permissions:
   contents: read
+  actions: read
   issues: write
 
 jobs:
@@ -36,6 +42,8 @@ jobs:
         id: gate
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: python3 digest.py gate "${{ github.event.schedule }}" 1 12 | tee -a "$GITHUB_OUTPUT"
   sync:
     needs: gate

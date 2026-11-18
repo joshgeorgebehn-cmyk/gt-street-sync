@@ -348,3 +348,21 @@ class Selection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExternalTimer(unittest.TestCase):
+    NOW = dt.datetime(2026, 11, 17, 20, 10, tzinfo=UTC)
+
+    def test_timer_runs_count_as_the_scheduled_checks(self):
+        t = lambda i, c: {**run(i, "workflow_dispatch", c), "display_title": "Scheduled check (external timer)"}
+        checks = digest.classify([t(1, "2026-11-17T01:17:05Z"), t(2, "2026-11-17T14:17:05Z"),
+                                  run(3, "workflow_dispatch", "2026-11-17T09:25:58Z")], self.NOW, report_check=lambda i: True)
+        self.assertEqual([(c["run_id"], c["expected"]) for c in checks], [(1, True), (3, False), (2, True)])
+
+    def test_github_backup_stands_down_after_a_timer_run(self):
+        recent = dt.datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        out = json.dumps({"workflow_runs": [{"display_title": "Scheduled check (external timer)", "created_at": recent}]})
+        with mock.patch.object(digest, "gh", return_value=out), mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "x/y"}):
+            self.assertTrue(digest.external_run_recent())
+        with mock.patch.object(digest, "gh", side_effect=RuntimeError("no")), mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "x/y"}):
+            self.assertFalse(digest.external_run_recent())
