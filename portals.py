@@ -210,6 +210,9 @@ EQ_HOME = "https://equipit.store.unleashedsoftware.com/home"
 EQ_API = "https://store-api.unleashedsoftware.com/api"
 
 
+EQ_DIAG = {}
+
+
 def read_equipit():
     """{code: (stockAvailable, soldOut)} for every product in the store, read through the signed-in browser."""
     from playwright.sync_api import sync_playwright
@@ -256,6 +259,23 @@ def read_equipit():
                 code = code_norm(it.get("productDisplayTitle"))
                 if code:
                     out[code] = (float(it.get("stockAvailable") or 0), bool(it.get("soldOut")))
+            if page_no == 1:
+                # Pricing diagnostics (key names and counts only): is a retail or default sell price available?
+                try:
+                    ids = [it.get("productId") for it in (model.get("products") or [])[:20] if it.get("productId")]
+                    pr = page.request.post(f"{EQ_API}/products/prices", data={"productIds": ids}, headers=headers, timeout=90000)
+                    pm = ((pr.json() or {}).get("model") or {}).get("products") or []
+                    EQ_DIAG["price_entries_per_product"] = sorted({len(x.get("prices") or []) for x in pm})
+                    EQ_DIAG["price_entry_keys"] = sorted({k for x in pm for e in (x.get("prices") or []) for k in e})
+                    EQ_DIAG["product_settings"] = {k: v for k, v in (model.get("productSettings") or {}).items() if isinstance(v, bool)}
+                    if ids:
+                        det = page.request.get(f"{EQ_API}/products/{ids[0]}", headers=headers, timeout=90000)
+                        dj = (det.json() or {}) if det.status == 200 else {}
+                        dm = dj.get("model") if isinstance(dj, dict) else None
+                        EQ_DIAG["detail_status"] = det.status
+                        EQ_DIAG["detail_keys"] = sorted(dm.keys())[:60] if isinstance(dm, dict) else type(dm).__name__
+                except Exception as e:
+                    EQ_DIAG["price_diag_error"] = f"{type(e).__name__}: {str(e)[:120]}"
             page_no += 1
             if page_no > 2000:
                 break
@@ -352,7 +372,7 @@ def main():
                 states.append((p, v, state_from_qty(qty, sellable_when_out=not sold_out)))
         rep["kits_matched"] = kits
         rep["diag"] = {"our_unmatched_sku_shapes": top_shapes(unmatched_skus), "portal_code_shapes": top_shapes(list(stock)),
-                       "unmatched_blank_sku": sum(1 for x in unmatched_skus if not x)}
+                       "unmatched_blank_sku": sum(1 for x in unmatched_skus if not x), **EQ_DIAG}
         rep["matched"] = len(states)
         if rep["rows"] < 1000 or rep["matched"] < 0.2 * max(1, rep["our_variants"]):
             rep["error"] = (f"only {rep['matched']} of {rep['our_variants']} variants matched from {rep['rows']} portal products; "
