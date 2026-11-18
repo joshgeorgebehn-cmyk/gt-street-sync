@@ -98,3 +98,15 @@ Agreed rules, which the portal code must follow:
 - **CoolDrive: stock and pricing.** Its prices and stock may both be applied, under the same rule as the other suppliers
   (supplier's shown price less $1, with the same 20% hold and minimum price protections).
 - Neither portal is read until its terms have been checked for automated access.
+
+## Dealer portal stock (portals.py)
+
+Runs in every check after the supplier websites. NYC Dealerline gives stock for GT Form, JSR and Black Rock
+(matched on size, PCD, offset and model words; prices stay with CNC). Equipit gives stock for the vendors in the
+EQUIPIT_VENDORS variable (default Tough Dog), matched on exact part number. Equipit prices are dealer buy prices and
+are never used for the "less $1" rule.
+
+Review mode is the default: the portals are read and compared and the digest lists the differences, but nothing
+changes. Set the repository variable PORTALS_APPLY to 1 to apply. A portal that cannot be read, or that matches
+fewer than 20% of our variants, never changes anything. Test on its own with the sync workflow's "only" box set to
+`portals`.

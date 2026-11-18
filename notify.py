@@ -158,6 +158,10 @@ def load_checks(manifest: dict) -> list[dict]:
             if not probs:
                 rep.setdefault("stock_changes", [])
                 chk["report"] = rep
+        try:
+            chk["portals"] = json.load(open(os.path.join(d, "portals.json")))
+        except (OSError, ValueError):
+            chk["portals"] = None
         if chk["report"] is not None:
             chk["verify"] = load_verify(d)
             if not chk["verify"].get("ran"):
@@ -384,6 +388,27 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
         left = f'<a href="{esc(url)}" style="color:{INK};text-decoration:none">{name}</a>' if url else name
         rows.append(pair_row(left, check_result(c)))
     inner.append(section("Checks in this digest", "Each supplier website read live at every check, then amended products rechecked (a sample when a run changes a lot).", rows))
+
+    # Dealer portals (NYC Dealerline, Equipit): the latest check that read them.
+    pc = next((c for c in reversed(checks) if c.get("portals")), None)
+    if pc:
+        pdat = pc["portals"]
+        applied = bool(pdat.get("apply"))
+        prow = []
+        for pname, r in (pdat.get("portals") or {}).items():
+            if r.get("matched") or r.get("ok"):
+                txt = (f'{r.get("rows", 0):,} portal products read, {r.get("matched", 0):,} of our variants matched, '
+                       f'{r.get("would_change", 0):,} stock difference{"s" if r.get("would_change", 0) != 1 else ""}')
+                if r.get("error"):
+                    txt += f". Not applied: {r['error']}"
+                prow.append(pair_row(esc(pname), esc(txt)))
+            else:
+                prow.append(pair_row(esc(pname), f'<span style="color:{RED}">Could not be read: {esc(r.get("error") or "unknown")}</span>'))
+            for ex in (r.get("examples") or [])[:12]:
+                prow.append(text_row(f'{ex.get("product")} {ex.get("variant")}: site shows {ex.get("now")}, portal shows {ex.get("portal")}'))
+        note = ("Stock from the dealer portals was applied." if applied else
+                "Review mode: the portals were read and compared, nothing was changed. These are the differences that would be applied.")
+        inner.append(section("Dealer portals", note, prow))
 
     # 1. Things that need a person.
     if m["mismatches"]:

@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Leave blank to run every supplier (normal). For a test of one supplier only, type e.g. cnc or xforce."
+        description: "Leave blank to run every supplier (normal). For a test of one supplier only, type e.g. cnc, xforce, or portals (dealer portals only)."
         type: string
         default: ""
 
@@ -88,6 +88,24 @@ jobs:
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
           ONLY: ${{ inputs.only || '' }}
         run: python3 maintenance.py
+      - name: Dealer portal stock (NYC Dealerline, Equipit)
+        if: always() && (inputs.only == '' || inputs.only == null || contains(inputs.only, 'portals'))
+        continue-on-error: true
+        timeout-minutes: 45
+        env:
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+          NYC_USER: ${{ secrets.NYC_USER }}
+          NYC_PASS: ${{ secrets.NYC_PASS }}
+          EQUIPIT_USER: ${{ secrets.EQUIPIT_USER }}
+          EQUIPIT_PASS: ${{ secrets.EQUIPIT_PASS }}
+          PORTALS_APPLY: ${{ vars.PORTALS_APPLY || '0' }}
+          EQUIPIT_VENDORS: ${{ vars.EQUIPIT_VENDORS || 'Tough Dog' }}
+        run: |
+          python3 -m pip install -q playwright && python3 -m playwright install --with-deps chromium > /dev/null
+          python3 -W ignore portals.py
       - name: Independent re-check against supplier websites
         if: (success() || failure())
         env:
@@ -105,7 +123,7 @@ jobs:
         if: always()
         run: |
           test -f report.md && cat report.md >> "$GITHUB_STEP_SUMMARY" || echo "No sync report" >> "$GITHUB_STEP_SUMMARY"
-          for f in verify.md channels.md maintenance.md; do test -f $f && cat $f >> "$GITHUB_STEP_SUMMARY" || true; done
+          for f in verify.md channels.md maintenance.md portals.md; do test -f $f && cat $f >> "$GITHUB_STEP_SUMMARY" || true; done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -117,6 +135,8 @@ jobs:
             verify.json
             channels.md
             maintenance.md
+            portals.md
+            portals.json
           retention-days: 60
 
 # Schedules re-saved 18 Nov 2026 so they bind to the repository owner account.
