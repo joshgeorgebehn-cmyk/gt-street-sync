@@ -19,6 +19,10 @@ on:
         description: "Leave blank to run every supplier (normal). For a test of one supplier only, type e.g. cnc, xforce, or portals (dealer portals only)."
         type: string
         default: ""
+      dry_run:
+        description: "Tick for a dry run of the dealer portals: they are read and compared, nothing is changed in Shopify, even if PORTALS_APPLY is 1."
+        type: boolean
+        default: false
       source:
         description: "Set to scheduler only by the external timer (cron-job.org). Leave blank for a manual run."
         type: string
@@ -109,7 +113,7 @@ jobs:
           NYC_PASS: ${{ secrets.NYC_PASS }}
           EQUIPIT_USER: ${{ secrets.EQUIPIT_USER }}
           EQUIPIT_PASS: ${{ secrets.EQUIPIT_PASS }}
-          PORTALS_APPLY: ${{ vars.PORTALS_APPLY || '0' }}
+          PORTALS_APPLY: ${{ inputs.dry_run && '0' || vars.PORTALS_APPLY || '0' }}
           EQUIPIT_VENDORS: ${{ vars.EQUIPIT_VENDORS || 'Tough Dog' }}
         run: |
           python3 -m pip install -q playwright && python3 -m playwright install --with-deps chromium > /dev/null
