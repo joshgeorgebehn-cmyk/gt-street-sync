@@ -230,6 +230,8 @@ def read_nyc():
                 "sent_fields": {k: (re.sub(r"[A-Za-z]", "x", re.sub(r"\d", "9", str(v)))[:12]) for k, v in f.items()},
                 "tables": len(re.findall(r"<table", body, re.I)), "trs": len(re.findall(r"<tr", body, re.I)),
                 "result_skeleton": __import__("skeleton").skeleton(body, r"<body", 70),
+                "after_selects": __import__("skeleton").skeleton(body[body.rfind("</select>"):], None, 150),
+                "class_counts": dict(__import__("collections").Counter(c for cl in re.findall(r'class="([^"]*)"', body[body.rfind("</select>"):]) for c in cl.split()).most_common(25)),
                 "ajax_paths": sorted(set(re.findall(r"""(?:url|\.post\(|\.get\(|fetch\()\s*:?\s*['"](/[A-Za-z][^'"?]*)""", body)))[:15],
                 "tablink_ctx": [re.sub(r"[A-Za-z]", "x", re.sub(r"\d", "9", m))[:90] for m in re.findall(r".{0,40}UserTabLinkId.{0,50}", body)][:4],
                 "forms_on_result": re.findall(r'<form[^>]*action="([^"]*)"', body)[:6],
