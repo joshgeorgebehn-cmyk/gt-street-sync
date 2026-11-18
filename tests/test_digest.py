@@ -272,29 +272,29 @@ class Scheduling(unittest.TestCase):
     def t(self, s): return dt.datetime.fromisoformat(s).replace(tzinfo=UTC)
 
     def test_exactly_one_cron_per_attempt_every_day(self):  # 26, 27
-        crons = {"sync_am": ["17 14 * * *", "17 15 * * *"], "sync_pm": ["17 1 * * *", "17 2 * * *"]}
+        crons = {"sync_am": ["17 22 * * *", "17 23 * * *"], "sync_pm": ["17 10 * * *", "17 11 * * *"]}
         day = dt.date(2026, 1, 1)
         while day < dt.date(2027, 1, 1):
             for name, pair in crons.items():
-                hours = [1] if name == "sync_am" else [12]
+                hours = [9] if name == "sync_am" else [21]
                 went = [c for c in pair if digest.gate(c, hours, dt.datetime.combine(day, dt.time(int(c.split()[1]), 20), UTC))]
                 self.assertEqual(len(went), 1, f"{name} on {day}: {went}")
             day += dt.timedelta(days=1)
 
-    def test_digest_attempts_land_7_or_8_am_and_never_three_misses(self):
-        crons = ["7 20 * * *", "7 21 * * *", "37 21 * * *", "37 22 * * *"]
+    def test_digest_attempts_land_10_or_11_am_and_never_three_misses(self):
+        crons = ["7 23 * * *", "37 23 * * *", "7 0 * * *", "37 0 * * *", "7 1 * * *"]
         for day in (dt.date(2026, 4, 5), dt.date(2026, 7, 1), dt.date(2026, 10, 4), dt.date(2026, 11, 18)):
-            went = [c for c in crons if digest.gate(c, [7, 8], dt.datetime.combine(day, dt.time(int(c.split()[1]), int(c.split()[0]) + 2), UTC))]
-            self.assertGreaterEqual(len(went), 2, day); self.assertLessEqual(len(went), 3, day)
+            went = [c for c in crons if digest.gate(c, [10, 11], dt.datetime.combine(day, dt.time(int(c.split()[1]), int(c.split()[0]) + 2), UTC))]
+            self.assertGreaterEqual(len(went), 2, day); self.assertLessEqual(len(went), 4, day)
 
     def test_late_start_still_runs(self):
-        self.assertTrue(digest.gate("17 14 * * *", [1], self.t("2026-11-17T16:05:00")))  # 3 hours late, still the 1am slot
+        self.assertTrue(digest.gate("17 22 * * *", [9], self.t("2026-11-18T01:05:00")))  # 3 hours late, still the 9am slot
 
     def test_dst_change_days(self):  # 26
-        self.assertFalse(digest.gate("17 14 * * *", [1], self.t("2026-10-03T14:17:00")))  # Sun 4 Oct, DST starts at 2am: 12:17am AEST
-        self.assertTrue(digest.gate("17 15 * * *", [1], self.t("2026-10-03T15:17:00")))   # 1:17am AEST, the real check
-        self.assertTrue(digest.gate("17 14 * * *", [1], self.t("2026-04-04T14:17:00")))   # day DST ends: 1:17am AEDT
-        self.assertFalse(digest.gate("17 15 * * *", [1], self.t("2026-04-04T15:17:00")))
+        self.assertTrue(digest.gate("17 22 * * *", [9], self.t("2026-10-03T22:17:00")))   # Sun 4 Oct, DST began: 22:17 UTC is 9:17am AEDT
+        self.assertFalse(digest.gate("17 23 * * *", [9], self.t("2026-10-03T23:17:00")))  # 10:17am AEDT, the other-season cron
+        self.assertTrue(digest.gate("17 23 * * *", [9], self.t("2026-04-04T23:17:00")))   # Sun 5 Apr, DST ended: 9:17am AEST
+        self.assertFalse(digest.gate("17 22 * * *", [9], self.t("2026-04-04T22:17:00")))  # 8:17am AEST
 
 
 def run(i, event, created, status="completed", conclusion="success"):
@@ -302,26 +302,26 @@ def run(i, event, created, status="completed", conclusion="success"):
 
 
 class Selection(unittest.TestCase):
-    NOW = dt.datetime(2026, 11, 17, 20, 10, tzinfo=UTC)  # 7:10am Wed Sydney
+    NOW = dt.datetime(2026, 11, 17, 23, 10, tzinfo=UTC)  # 10:10am Wed Sydney
 
     def test_picks_the_two_expected_and_labels_manual(self):  # 3 (selection)
-        runs = [run(1, "schedule", "2026-11-17T01:17:30Z"), run(2, "schedule", "2026-11-17T02:17:30Z"),   # 12:17 real, 13:17 gated
-                run(3, "schedule", "2026-11-17T14:17:40Z"), run(4, "schedule", "2026-11-17T15:17:40Z"),   # 1:17 real, 2:17 gated
-                run(5, "workflow_dispatch", "2026-11-17T09:25:58Z"), run(6, "schedule", "2026-11-15T01:17:00Z")]
+        runs = [run(1, "schedule", "2026-11-17T10:17:30Z"), run(2, "schedule", "2026-11-17T11:17:30Z"),   # 9:17pm real, 10:17pm gated
+                run(3, "schedule", "2026-11-17T22:17:40Z"), run(4, "schedule", "2026-11-17T23:05:40Z"),   # 9:17am real, 10:05am gated
+                run(5, "workflow_dispatch", "2026-11-17T12:25:58Z"), run(6, "schedule", "2026-11-15T01:17:00Z")]
         checks = digest.classify(runs, self.NOW, report_check=lambda i: i in (1, 3, 5))
         self.assertEqual([(c["run_id"], c["expected"]) for c in checks], [(1, True), (5, False), (3, True)])
 
     def test_missing_expected_check(self):  # 16
-        checks = digest.classify([run(1, "schedule", "2026-11-17T01:17:30Z")], self.NOW, report_check=lambda i: True)
+        checks = digest.classify([run(1, "schedule", "2026-11-17T10:17:30Z")], self.NOW, report_check=lambda i: True)
         self.assertEqual([c["state"] for c in checks], ["done", "missing"])
 
     def test_running_and_overrun(self):  # 17, 18
-        r = run(3, "schedule", "2026-11-17T14:17:40Z", status="in_progress", conclusion=None)
+        r = run(3, "schedule", "2026-11-17T22:17:40Z", status="in_progress", conclusion=None)
         self.assertEqual(digest.classify([r], self.NOW, report_check=lambda i: False)[-1]["state"], "running")
-        self.assertEqual(digest.classify([r], self.NOW + dt.timedelta(hours=4), report_check=lambda i: False)[-1]["state"], "timed_out")
+        self.assertEqual(digest.classify([r], self.NOW + dt.timedelta(hours=7), report_check=lambda i: False)[-1]["state"], "timed_out")
 
     def test_failed_run_counts_as_the_check(self):
-        checks = digest.classify([run(3, "schedule", "2026-11-17T14:17:40Z", conclusion="failure")], self.NOW, report_check=lambda i: False)
+        checks = digest.classify([run(3, "schedule", "2026-11-17T22:17:40Z", conclusion="failure")], self.NOW, report_check=lambda i: False)
         self.assertEqual((checks[-1]["run_id"], checks[-1]["conclusion"]), (3, "failure"))
 
     def test_wait_loop_waits_then_reports(self):  # D, E
@@ -351,12 +351,12 @@ if __name__ == "__main__":
 
 
 class ExternalTimer(unittest.TestCase):
-    NOW = dt.datetime(2026, 11, 17, 20, 10, tzinfo=UTC)
+    NOW = dt.datetime(2026, 11, 17, 23, 10, tzinfo=UTC)
 
     def test_timer_runs_count_as_the_scheduled_checks(self):
         t = lambda i, c: {**run(i, "workflow_dispatch", c), "display_title": "Scheduled check (external timer)"}
-        checks = digest.classify([t(1, "2026-11-17T01:17:05Z"), t(2, "2026-11-17T14:17:05Z"),
-                                  run(3, "workflow_dispatch", "2026-11-17T09:25:58Z")], self.NOW, report_check=lambda i: True)
+        checks = digest.classify([t(1, "2026-11-17T10:17:05Z"), t(2, "2026-11-17T22:17:05Z"),
+                                  run(3, "workflow_dispatch", "2026-11-17T12:25:58Z")], self.NOW, report_check=lambda i: True)
         self.assertEqual([(c["run_id"], c["expected"]) for c in checks], [(1, True), (3, False), (2, True)])
 
     def test_github_backup_stands_down_after_a_timer_run(self):

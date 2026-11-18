@@ -9,7 +9,7 @@
   python3 digest.py sent DATE          prints sent=true if a digest for that Sydney date was already accepted
   python3 digest.py collect            waits for the expected checks, downloads their reports, writes manifest.json
 
-The digest covers yesterday's 12pm check and today's 1am check (both scheduled), plus any manual runs started in
+The digest covers yesterday's 9pm check and today's 9am check (both scheduled), plus any manual runs started in
 that period, which are labelled as manual. Each expected check is reported as ok, failed, running, missing or
 without a usable report; notify.py turns those into the email.
 """
@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 SYD = ZoneInfo("Australia/Sydney")
 UTC = dt.timezone.utc
 SYNC_TIMEOUT_MIN = 355
-EXPECTED = (("midday", 12, -1, "12pm check"), ("morning", 1, 0, "1am check"))  # slot, Sydney hour, day offset, label
+EXPECTED = (("midday", 21, -1, "9pm check"), ("morning", 9, 0, "9am check"))  # slot, Sydney hour, day offset, label
 
 
 def scheduled_moment(cron: str, started: dt.datetime) -> dt.datetime:
@@ -74,8 +74,10 @@ def slot_for(run: dict, today: dt.date) -> str | None:
     """Which expected check a scheduled run belongs to, from its Sydney start time."""
     loc = parse(run["created_at"]).astimezone(SYD)
     if loc.date() == today and loc.hour < 7:
+        return "midday"  # the 9pm check, started late after midnight (slot key kept as the earlier check)
+    if loc.date() == today and loc.hour >= 7:
         return "morning"
-    if loc.date() == today - dt.timedelta(days=1) and 11 <= loc.hour < 18:
+    if loc.date() == today - dt.timedelta(days=1) and loc.hour >= 18:
         return "midday"
     return None
 
@@ -93,7 +95,7 @@ def list_runs() -> list[dict]:
 def classify(runs: list[dict], now: dt.datetime, report_check=has_report) -> list[dict]:
     """One entry per expected check (found or not) plus manual runs in the period, oldest first."""
     today = now.astimezone(SYD).date()
-    period_start = dt.datetime.combine(today - dt.timedelta(days=1), dt.time(7), SYD)
+    period_start = dt.datetime.combine(today - dt.timedelta(days=1), dt.time(10), SYD)
     found: dict[str, list[dict]] = {"midday": [], "morning": []}
     manual = []
     for r in runs:
