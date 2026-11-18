@@ -40,6 +40,31 @@ def code_norm(s):
     return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
 
 
+def shape(s):
+    return re.sub(r"[A-Za-z]", "A", re.sub(r"\d", "9", s or ""))
+
+
+def top_shapes(values, n=8):
+    from collections import Counter
+    return Counter(shape(v) for v in values if v).most_common(n)
+
+
+def kit_codes(sku):
+    """Part numbers in a kit SKU such as TDC1063/1064/1065/1066 or FOR-013/14/15/16. Later parts that are only
+    digits take the first part's letters and leading digits, padded to the same length."""
+    parts = [x.strip() for x in re.split(r"[/,+&]", sku or "") if x.strip()]
+    if len(parts) < 2:
+        return []
+    first = parts[0]
+    out = [first]
+    for x in parts[1:]:
+        if re.fullmatch(r"\d+", x) and len(x) <= len(first):
+            out.append(first[: len(first) - len(x)] + x)
+        else:
+            out.append(x)
+    return out
+
+
 def state_from_qty(qty, sellable_when_out=False):
     """(state, quantity) in the same model as sync.py."""
     q = int(qty or 0)
@@ -104,12 +129,19 @@ def form_fields(html, action):
     return fields
 
 
+NYC_DIAG = {}
+
+
 def read_nyc():
     cfg = pl.PORTALS["nyc"]
     op, _, _ = pl.sign_in("nyc", os.environ["NYC_USER"].strip(), os.environ["NYC_PASS"].strip())
     _, page = pl._get(op, cfg["home"] + "/Search/Family/Wheels")
     rows = parse_nyc_rows(page)
     fields = form_fields(page, "/Search/SearchByProductFamily")
+    NYC_DIAG["requests"] = [{"path": "/Search/Family/Wheels", "rows": len(rows)}]
+    NYC_DIAG["fields"] = sorted(k for k in (fields or {}) if "Token" not in k)
+    NYC_DIAG["family_value_shape"] = shape((fields or {}).get("ProductFamilyName", ""))
+    NYC_DIAG["page_forms"] = re.findall(r'<form[^>]*action="([^"]*)"', page)[:10]
     if fields is not None:
         fields["ProductFamilyName"] = fields.get("ProductFamilyName") or "Wheels"
         req = urllib.request.Request(cfg["home"] + "/Search/SearchByProductFamily", data=urllib.parse.urlencode(fields).encode(),
@@ -117,6 +149,9 @@ def read_nyc():
         with op.open(req, timeout=300) as r:
             body = r.read().decode("utf-8", "replace")
         more = parse_nyc_rows(body)
+        NYC_DIAG["requests"].append({"path": "/Search/SearchByProductFamily", "rows": len(more), "bytes": len(body)})
+        # The wheel search page may also offer brand links; record their paths (no values).
+        NYC_DIAG["wheel_links"] = sorted(set(re.findall(r'href="(/(?:Search|WheelSearch)[^"?#]*)', page)))[:20]
         if len(more) > len(rows):
             rows = more
     return rows
@@ -266,6 +301,10 @@ def main():
             raise RuntimeError("NYC_USER / NYC_PASS secrets are not set")
         rows = read_nyc()
         rep["rows"] = len(rows)
+        from collections import Counter
+        rep["diag"] = {"makes": Counter(r["make"] for r in rows).most_common(15),
+                       "desc_shapes": [re.sub(r"[A-Za-z]", "x", re.sub(r"\d", "9", r["desc"]))[:50] for r in rows[:8]],
+                       **NYC_DIAG}
         prods = []
         for v in NYC_VENDORS:
             for p in sync.shopify_products(f'vendor:"{v}"'):
@@ -296,15 +335,24 @@ def main():
         rep["rows"] = len(stock)
         prods = [p for v in EQUIPIT_VENDORS for p in sync.shopify_products(f'vendor:"{v}"')]
         rep["our_variants"] = sum(len(p["variants"]) for p in prods)
-        states = []
+        states, unmatched_skus, kits = [], [], 0
         for p in prods:
             for v in p["variants"]:
                 hit = stock.get(code_norm(v["sku"])) if v["sku"] else None
+                if hit is None and v["sku"]:
+                    parts = [stock.get(code_norm(x)) for x in kit_codes(v["sku"])]
+                    if parts and all(x is not None for x in parts):
+                        hit = (min(x[0] for x in parts), any(x[1] for x in parts))
+                        kits += 1
                 if hit is None:
                     rep["unmatched"] += 1
+                    unmatched_skus.append(v["sku"])
                     continue
                 qty, sold_out = hit
                 states.append((p, v, state_from_qty(qty, sellable_when_out=not sold_out)))
+        rep["kits_matched"] = kits
+        rep["diag"] = {"our_unmatched_sku_shapes": top_shapes(unmatched_skus), "portal_code_shapes": top_shapes(list(stock)),
+                       "unmatched_blank_sku": sum(1 for x in unmatched_skus if not x)}
         rep["matched"] = len(states)
         if rep["rows"] < 1000 or rep["matched"] < 0.2 * max(1, rep["our_variants"]):
             rep["error"] = (f"only {rep['matched']} of {rep['our_variants']} variants matched from {rep['rows']} portal products; "
