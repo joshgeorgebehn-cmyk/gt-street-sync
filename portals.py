@@ -227,6 +227,9 @@ def read_nyc():
             got = parse_nyc_rows(body)
             NYC_DIAG.setdefault("brand_searches", []).append({"brand": vend, "landed": landed, "rows": len(got), "bytes": len(body),
                 "desc_shapes": [re.sub(r"[A-Za-z]", "x", re.sub(r"\d", "9", x["desc"]))[:50] for x in got[:3]],
+                "sent_fields": {k: (re.sub(r"[A-Za-z]", "x", re.sub(r"\d", "9", str(v)))[:12]) for k, v in f.items()},
+                "tables": len(re.findall(r"<table", body, re.I)), "trs": len(re.findall(r"<tr", body, re.I)),
+                "result_skeleton": __import__("skeleton").skeleton(body, r"</form>", 50),
                 "forms_on_result": re.findall(r'<form[^>]*action="([^"]*)"', body)[:6],
                 "links_on_result": sorted(set(re.findall(r'href="(/(?:WheelSearch|Search|Product)[^"?#]*)', body)))[:15]})
             found += got
