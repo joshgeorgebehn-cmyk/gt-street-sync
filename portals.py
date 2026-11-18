@@ -241,12 +241,65 @@ def read_nyc(prods=None):
             rows = found
     except Exception as e:
         NYC_DIAG["wheelsearch_error"] = f"{type(e).__name__}: {str(e)[:150]}"
-    if prods:
-        try:
-            rows = rows + nyc_code_lookups(op, cfg, prods)
-        except Exception as e:
-            NYC_DIAG["code_lookup_error"] = f"{type(e).__name__}: {str(e)[:150]}"
+    try:
+        more_rows = nyc_matrix(op, cfg)
+        if len(more_rows) > len(rows):
+            rows = more_rows
+    except Exception as e:
+        NYC_DIAG["matrix_error"] = f"{type(e).__name__}: {str(e)[:150]}"
     return rows
+
+
+def nyc_matrix(op, cfg):
+    """One run that tries every search route and records, for each, how many rows came back and the page's own
+    result message (digits masked). Rows from the best route are used. Page text is UI wording only, no product values."""
+    _, ws = pl._get(op, cfg["home"] + "/WheelSearch/")
+    NYC_DIAG["tablink_links"] = sorted(set(re.sub(r"\d", "9", m)[:80] for m in re.findall(r'href="([^"]*UserTabLinkId[^"]*)"', ws)))[:5]
+    NYC_DIAG["tablink_inputs"] = [re.sub(r"[A-Za-z]", "x", re.sub(r"\d", "9", m))[:80] for m in re.findall(r"<input[^>]*UserTabLinkId[^>]*>", ws)][:3]
+    def summarise(body):
+        msg = re.findall(r"<div[^>]*>\s*([^<]{0,80})<strong>([^<]{0,30})</strong>([^<]{0,80})", body)
+        return {"rows": len(parse_nyc_rows(body)), "bytes": len(body), "dollar_signs": body.count("$"),
+                "message": [re.sub(r"\d", "9", " ".join(m)).strip()[:140] for m in msg[:2]]}
+    def go(action, fields, method):
+        try:
+            if method == "POST":
+                req = urllib.request.Request(cfg["home"] + action, data=urllib.parse.urlencode(fields).encode(),
+                                             headers={"User-Agent": pl.UA, "Content-Type": "application/x-www-form-urlencoded"})
+            else:
+                req = urllib.request.Request(cfg["home"] + action + "?" + urllib.parse.urlencode(fields), headers={"User-Agent": pl.UA})
+            with op.open(req, timeout=120) as r:
+                return r.read().decode("utf-8", "replace")
+        except Exception as e:
+            return "ERR " + f"{type(e).__name__}: {str(e)[:60]}"
+    plans = []
+    ef = form_fields(ws, "/WheelSearch/SearchElements") or {}
+    bsel = re.search(r'<select[^>]*name="Brand"[^>]*>(.*?)</select>', ws, re.S | re.I)
+    bopts = {n.strip().lower(): v for v, n in re.findall(r'<option[^>]*value="([^"]*)"[^>]*>\s*([^<]+?)\s*</option>', bsel.group(1))} if bsel else {}
+    for t in ("0", "1", "2", ef.get("WheelSearchType", "")):
+        f = dict(ef)
+        f["Brand"] = bopts.get("gt form", "GT Form")
+        f["WheelSearchType"] = t
+        plans.append((f"elements type={t}", "/WheelSearch/SearchElements", f))
+    qf = form_fields(ws, "/WheelSearch/QuickSearch") or {}
+    for q in ("Hearts", "GT Form", "JSR", "17x9"):
+        plans.append((f"quick {shape(q)}", "/WheelSearch/QuickSearch", {**qf, "SearchQuery": q}))
+    pf = form_fields(ws, "/WheelSearch/ByProductCode") or {}
+    for q in ("ITM74433", "ITM74433-2", "74433"):
+        plans.append((f"code {shape(q)}", "/WheelSearch/ByProductCode", {**pf, "ProductCode": q}))
+    out, best, best_rows = [], 0, []
+    for label, action, f in plans:
+        for method in ("POST", "GET"):
+            body = go(action, f, method)
+            if body.startswith("ERR"):
+                out.append({"try": label, "method": method, "error": body[4:]})
+                continue
+            sm = summarise(body)
+            out.append({"try": label, "method": method, **sm})
+            rr = parse_nyc_rows(body)
+            if len(rr) > best:
+                best, best_rows = len(rr), rr
+    NYC_DIAG["matrix"] = out
+    return best_rows
 
 
 def nyc_code_lookups(op, cfg, prods):
