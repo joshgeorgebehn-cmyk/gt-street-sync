@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -207,9 +208,19 @@ def read_nyc():
             req = urllib.request.Request(cfg["home"] + "/WheelSearch/SearchElements", data=urllib.parse.urlencode(f).encode(),
                                          headers={"User-Agent": pl.UA, "Content-Type": "application/x-www-form-urlencoded"})
             try:
-                with op.open(req, timeout=300) as r:
-                    body = r.read().decode("utf-8", "replace")
-                    landed = urllib.parse.urlsplit(r.geturl()).path
+                try:
+                    with op.open(req, timeout=300) as r:
+                        body = r.read().decode("utf-8", "replace")
+                        landed = urllib.parse.urlsplit(r.geturl()).path
+                except urllib.error.HTTPError as he:
+                    if he.code != 405:
+                        raise
+                    # the search form is a GET form: resend the same fields as a query string
+                    greq = urllib.request.Request(cfg["home"] + "/WheelSearch/SearchElements?" + urllib.parse.urlencode(f),
+                                                  headers={"User-Agent": pl.UA})
+                    with op.open(greq, timeout=300) as r:
+                        body = r.read().decode("utf-8", "replace")
+                        landed = urllib.parse.urlsplit(r.geturl()).path
             except Exception as e:
                 NYC_DIAG.setdefault("brand_searches", []).append({"brand": vend, "error": f"{type(e).__name__}: {str(e)[:80]}"})
                 continue
