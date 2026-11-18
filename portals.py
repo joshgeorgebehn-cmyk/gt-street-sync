@@ -129,7 +129,8 @@ def _cell(row, cls):
     m = re.search(r'<td[^>]*class="[^"]*\b' + cls + r'\b[^"]*"[^>]*>(.*?)</td>', row, re.S | re.I)
     if not m:
         return ""
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()
+    import html as _html
+    return re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", m.group(1)))).strip()
 
 
 def parse_nyc_rows(html):
@@ -685,6 +686,7 @@ def main():
                        **NYC_DIAG}
         matched, rep["unmatched"], rep["ambiguous"], rep["rows_with_size"] = match_nyc(rows, prods)
         rep["matched"] = len(matched)
+        rep["diag"]["unkeyed_wheel_shapes"] = top_shapes([r["desc"][:60] for r in rows if WHEEL_SIZE.search(r["desc"]) and not wheel_key(r["desc"])], 6)
         rep["our_variants"] = sum(len(p["variants"]) for p in prods)
         if rep["rows"] < 50 or rep["matched"] < 0.2 * max(1, rep["our_variants"]):
             rep["error"] = (f"only {rep['matched']} of {rep['our_variants']} variants matched from {rep['rows']} portal rows; "

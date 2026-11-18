@@ -72,3 +72,12 @@ class NycCodeMatch(unittest.TestCase):
         matched, unmatched, amb, _ = portals.match_nyc(rows, prods)
         self.assertEqual(len(matched), 1)
         self.assertEqual(unmatched, 1)
+
+
+class NycEntities(unittest.TestCase):
+    def test_html_entity_offset(self):
+        import portals
+        row = ('<tr class="BuyingTableRow"><td class="BuyingTableProductCode"><div>X1</div></td>'
+               '<td class="BuyingTableDesc">Black Rock Fury 18x9 5x127 &#x2B;12 Satin</td></tr>')
+        r = portals.parse_nyc_rows(row)[0]
+        self.assertEqual(portals.wheel_key(r["desc"]), ("18x9", "5x127", "+12"))
