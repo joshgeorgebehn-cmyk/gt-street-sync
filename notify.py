@@ -123,7 +123,7 @@ def load_verify(d: str) -> dict:
     m = re.search(r"re-checked against the supplier: (\d+)", md)
     if not m:
         return {"ran": False, "problem": "verify.md did not contain a result"}
-    a = re.search(r"Of which amended this run: (\d+)", md)
+    a = re.search(r"(?:Of which amended this run|Amended this run): (\d+)", md)
     return {"ran": True, "rechecked": int(m.group(1)), "amended": int(a.group(1)) if a else None, "sampled": None,
             "mismatches": [l[2:] for l in md.splitlines() if l.startswith("- ") and (l[2:].startswith(("PRICE", "STOCK")))]}
 
@@ -383,7 +383,7 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
         name = esc(c.get("label", "check")) + ("" if c.get("expected") else f' <span style="color:{GREY};font-weight:400">(manual)</span>')
         left = f'<a href="{esc(url)}" style="color:{INK};text-decoration:none">{name}</a>' if url else name
         rows.append(pair_row(left, check_result(c)))
-    inner.append(section("Checks in this digest", "Each supplier website read live at every check, then every amended product rechecked.", rows))
+    inner.append(section("Checks in this digest", "Each supplier website read live at every check, then amended products rechecked (a sample when a run changes a lot).", rows))
 
     # 1. Things that need a person.
     if m["mismatches"]:

@@ -50,6 +50,16 @@ def main():
     amended |= {c.get("id") for c in r.get("new_variants", [])}
     amended.discard(None)
     rnd = random.Random()
+    # Time budget: re-check at most VERIFY_MAX_AMENDED amended variants (price changes first, big drops always),
+    # so the check finishes inside the job's time limit even after a very large run.
+    cap = int(os.environ.get("VERIFY_MAX_AMENDED", "600"))
+    total_amended = len(amended)
+    if len(amended) > cap:
+        big = [c.get("id") for c in r.get("big_drops", []) if c.get("id")]
+        prices = [c.get("id") for c in r.get("price_changes", []) if c.get("id") and c.get("id") not in big]
+        others = sorted(amended - set(big) - set(prices))
+        rnd.shuffle(prices); rnd.shuffle(others)
+        amended = set((big + prices + others)[:cap])
     cnc_all = r.get("cnc_applied", [])
     cnc = [a for a in cnc_all if a["variant"] in amended]
     rest = [a for a in cnc_all if a["variant"] not in amended]
@@ -63,7 +73,7 @@ def main():
         sup[k] = ch + rnd.sample(rest, min(int(os.environ.get("VERIFY_UNCHANGED_SUPPLIER", "10")), len(rest)))
     ids = [a["variant"] for a in cnc] + [a["variant"] for v in sup.values() for a in v]
     live = shopify(ids)
-    print(f"Re-checking {len(ids)} variants ({len(amended)} amended this run) against the supplier websites", flush=True)
+    print(f"Re-checking {len(ids)} variants ({len(amended)} of {total_amended} amended this run) against the supplier websites", flush=True)
     checked, bad, unreadable = 0, [], 0
 
     # CNC: one fresh read per page (a page covers several offsets).
@@ -111,7 +121,7 @@ def main():
                 if ss != st[0] or (st[0] == "low" and (n.get("inventoryQuantity") or 0) != st[1]):
                     bad.append(f"STOCK {a['name']}: GT Street {ss} ({n.get('inventoryQuantity')}), {store} shows {st[0]} ({st[1]})")
     lines = ["# Independent verification", "", f"- Variants re-checked against the supplier: {checked}",
-             f"- Of which amended this run: {len(amended)}", f"- Pages unreadable during the re-check (not counted): {unreadable}",
+             f"- Amended this run: {total_amended} (re-checked: {len(amended)}{', a sample within the time limit' if total_amended > len(amended) else ''})", f"- Pages unreadable during the re-check (not counted): {unreadable}",
              f"- Mismatches: {len(bad)}"]
     if bad:
         lines += ["", "## Mismatches (fix before the next run)"] + [f"- {b}" for b in bad[:500]]
@@ -119,7 +129,7 @@ def main():
     print(out)
     open("verify.md", "w").write(out)
     # Structured result for the daily digest (verify.md stays for people).
-    json.dump({"ran": True, "run_id": os.environ.get("GITHUB_RUN_ID", ""), "rechecked": checked, "amended": len(amended),
+    json.dump({"ran": True, "run_id": os.environ.get("GITHUB_RUN_ID", ""), "rechecked": checked, "amended": total_amended, "amended_checked": len(amended),
                "sampled": max(0, len(ids) - len(amended)), "unreadable": unreadable, "mismatches": bad[:500]},
               open("verify.json", "w"), indent=1)
     if bad:
