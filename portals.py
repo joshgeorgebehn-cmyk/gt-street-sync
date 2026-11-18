@@ -188,6 +188,35 @@ def read_nyc():
         NYC_DIAG["wheel_links"] = sorted(set(re.findall(r'href="(/(?:Search|WheelSearch)[^"?#]*)', page)))[:20]
         if len(more) > len(rows):
             rows = more
+    # Wheel search by brand (JSR, GT Form and Black Rock are brands in the portal's wheel search).
+    try:
+        _, ws = pl._get(op, cfg["home"] + "/WheelSearch/")
+        NYC_DIAG["wheelsearch_forms"] = [{"action": a, "fields": sorted(set(re.findall(r'name="([^"]+)"', body)))[:20]}
+                                         for a, body in re.findall(r'<form[^>]*action="([^"]*)"[^>]*>(.*?)</form>', ws, re.S | re.I)][:8]
+        NYC_DIAG["wheelsearch_selects"] = {n: len(re.findall(r"<option", body)) for n, body in
+                                           re.findall(r'<select[^>]*name="([^"]+)"[^>]*>(.*?)</select>', ws, re.S | re.I)}
+        brands = {n.lower(): v for v, n in re.findall(r'<option[^>]*value="([^"]*)"[^>]*>\s*([^<]+?)\s*</option>', ws)}
+        NYC_DIAG["brands_listed"] = sorted(b for b in brands if any(w.lower() in b for w in NYC_VENDORS))
+        qf = form_fields(ws, "/WheelSearch/QuickSearch") or form_fields(page, "/WheelSearch/QuickSearch") or {}
+        found = []
+        for vend in NYC_VENDORS:
+            f = dict(qf)
+            f["SearchQuery"] = vend
+            req = urllib.request.Request(cfg["home"] + "/WheelSearch/QuickSearch", data=urllib.parse.urlencode(f).encode(),
+                                         headers={"User-Agent": pl.UA, "Content-Type": "application/x-www-form-urlencoded"})
+            with op.open(req, timeout=300) as r:
+                body = r.read().decode("utf-8", "replace")
+                landed = urllib.parse.urlsplit(r.geturl()).path
+            got = parse_nyc_rows(body)
+            NYC_DIAG.setdefault("brand_searches", []).append({"brand": vend, "landed": landed, "rows": len(got), "bytes": len(body),
+                "desc_shapes": [re.sub(r"[A-Za-z]", "x", re.sub(r"\d", "9", x["desc"]))[:50] for x in got[:3]],
+                "forms_on_result": re.findall(r'<form[^>]*action="([^"]*)"', body)[:6],
+                "links_on_result": sorted(set(re.findall(r'href="(/(?:WheelSearch|Search|Product)[^"?#]*)', body)))[:15]})
+            found += got
+        if len(found) > len(rows):
+            rows = found
+    except Exception as e:
+        NYC_DIAG["wheelsearch_error"] = f"{type(e).__name__}: {str(e)[:150]}"
     return rows
 
 
@@ -245,6 +274,9 @@ EQ_API = "https://store-api.unleashedsoftware.com/api"
 
 
 EQ_DIAG = {}
+EQ_PRICE_IDS = set()
+EQ_IDS = {}
+EQ_WANT_PRICES = []  # set by main before reading: our (sku, price) pairs, for a ratio check only
 
 
 def read_equipit():
@@ -293,12 +325,14 @@ def read_equipit():
                 code = code_norm(it.get("productDisplayTitle"))
                 if code:
                     out[code] = (float(it.get("stockAvailable") or 0), bool(it.get("soldOut")))
+                    EQ_IDS[code] = it.get("productId")
             if page_no == 1:
                 # Pricing diagnostics (key names and counts only): is a retail or default sell price available?
                 try:
                     ids = [it.get("productId") for it in (model.get("products") or [])[:20] if it.get("productId")]
                     pr = page.request.post(f"{EQ_API}/products/prices", data={"productIds": ids}, headers=headers, timeout=90000)
                     pm = ((pr.json() or {}).get("model") or {}).get("products") or []
+                    EQ_PRICE_IDS.update({x.get("productId") for x in pm})
                     EQ_DIAG["price_entries_per_product"] = sorted({len(x.get("prices") or []) for x in pm})
                     EQ_DIAG["price_entry_keys"] = sorted({k for x in pm for e in (x.get("prices") or []) for k in e})
                     EQ_DIAG["product_settings"] = {k: v for k, v in (model.get("productSettings") or {}).items() if isinstance(v, bool)}
@@ -313,6 +347,24 @@ def read_equipit():
             page_no += 1
             if page_no > 2000:
                 break
+        # Ratio check for up to 150 of our products: our price / Equipit unitPrice and / discountedUnitPrice.
+        try:
+            pairs = [(EQ_IDS.get(code_norm(c)), price) for sku, price in EQ_WANT_PRICES for c in code_candidates(sku)[:1]]
+            pairs = [(i, p) for i, p in pairs if i and p][:150]
+            ratios_u, ratios_d = [], []
+            for k in range(0, len(pairs), 50):
+                chunk = pairs[k:k + 50]
+                pr = page.request.post(f"{EQ_API}/products/prices", data={"productIds": [i for i, _ in chunk]}, headers=headers, timeout=90000)
+                pm = {x.get("productId"): (x.get("prices") or [{}])[0] for x in ((pr.json() or {}).get("model") or {}).get("products") or []}
+                for i, ours in chunk:
+                    e = pm.get(i) or {}
+                    if e.get("unitPrice"): ratios_u.append(ours / float(e["unitPrice"]))
+                    if e.get("discountedUnitPrice"): ratios_d.append(ours / float(e["discountedUnitPrice"]))
+            med = lambda xs: round(sorted(xs)[len(xs) // 2], 3) if xs else None
+            EQ_DIAG["price_ratio_ours_over_unit"] = {"n": len(ratios_u), "median": med(ratios_u)}
+            EQ_DIAG["price_ratio_ours_over_discounted"] = {"n": len(ratios_d), "median": med(ratios_d)}
+        except Exception as e:
+            EQ_DIAG["ratio_error"] = f"{type(e).__name__}: {str(e)[:120]}"
         b.close()
     return out
 
@@ -385,9 +437,10 @@ def main():
     try:
         if not os.environ.get("EQUIPIT_USER"):
             raise RuntimeError("EQUIPIT_USER / EQUIPIT_PASS secrets are not set")
+        prods = [p for v in EQUIPIT_VENDORS for p in sync.shopify_products(f'vendor:"{v}"')]
+        EQ_WANT_PRICES[:] = [(v["sku"], v["price"]) for p in prods for v in p["variants"] if v["sku"] and v["price"]]
         stock = read_equipit()
         rep["rows"] = len(stock)
-        prods = [p for v in EQUIPIT_VENDORS for p in sync.shopify_products(f'vendor:"{v}"')]
         rep["our_variants"] = sum(len(p["variants"]) for p in prods)
         states, unmatched_skus, kits = [], [], 0
         for p in prods:
