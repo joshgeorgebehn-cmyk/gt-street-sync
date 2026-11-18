@@ -62,3 +62,13 @@ class Portals(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NycCodeMatch(unittest.TestCase):
+    def test_exact_code_match_wins(self):
+        import portals
+        rows = [{"code": "ITM74433-2-P0", "desc": "x", "make": "", "qty": 3}]
+        prods = [{"title": "GT Form Hearts", "vendor": "GT Form", "variants": [{"sku": "ITM74433-2-P0", "opts": {}}, {"sku": "ITM1-P5", "opts": {}}]}]
+        matched, unmatched, amb, _ = portals.match_nyc(rows, prods)
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(unmatched, 1)

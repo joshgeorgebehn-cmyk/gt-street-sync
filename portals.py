@@ -167,7 +167,7 @@ def form_fields(html, action):
 NYC_DIAG = {}
 
 
-def read_nyc():
+def read_nyc(prods=None):
     cfg = pl.PORTALS["nyc"]
     op, _, _ = pl.sign_in("nyc", os.environ["NYC_USER"].strip(), os.environ["NYC_PASS"].strip())
     _, page = pl._get(op, cfg["home"] + "/Search/Family/Wheels")
@@ -241,7 +241,74 @@ def read_nyc():
             rows = found
     except Exception as e:
         NYC_DIAG["wheelsearch_error"] = f"{type(e).__name__}: {str(e)[:150]}"
+    if prods:
+        try:
+            rows = rows + nyc_code_lookups(op, cfg, prods)
+        except Exception as e:
+            NYC_DIAG["code_lookup_error"] = f"{type(e).__name__}: {str(e)[:150]}"
     return rows
+
+
+def nyc_code_lookups(op, cfg, prods):
+    """Look our own NYC product codes up one by one (/WheelSearch/ByProductCode). Our wheel SKUs are NYC item codes with an
+    offset suffix (ITM74433-2-P0), so try the full SKU on a few variants and, if that finds nothing, the base code."""
+    import time
+    _, ws = pl._get(op, cfg["home"] + "/WheelSearch/")
+    base_fields = form_fields(ws, "/WheelSearch/ByProductCode")
+    diag = NYC_DIAG.setdefault("code_lookup", {"form_found": base_fields is not None})
+    if base_fields is None:
+        return []
+
+    def ask(code):
+        f = dict(base_fields)
+        f["ProductCode"] = code
+        data = urllib.parse.urlencode(f).encode()
+        req = urllib.request.Request(cfg["home"] + "/WheelSearch/ByProductCode", data=data,
+                                     headers={"User-Agent": pl.UA, "Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            try:
+                with op.open(req, timeout=120) as r:
+                    return r.read().decode("utf-8", "replace")
+            except urllib.error.HTTPError as he:
+                if he.code != 405:
+                    raise
+                with op.open(urllib.request.Request(cfg["home"] + "/WheelSearch/ByProductCode?" + urllib.parse.urlencode(f),
+                                                    headers={"User-Agent": pl.UA}), timeout=120) as r:
+                    return r.read().decode("utf-8", "replace")
+        except Exception as e:
+            diag["last_error"] = f"{type(e).__name__}: {str(e)[:80]}"
+            return ""
+
+    skus = [v["sku"] for p in prods for v in p["variants"] if v.get("sku")]
+    base = lambda x: re.sub(r"-[PN]\d+$", "", x)
+    trial = []
+    for sk in skus[:4]:
+        full, b = parse_nyc_rows(ask(sk)), parse_nyc_rows(ask(base(sk)))
+        trial.append({"sku_shape": shape(sk), "full_rows": len(full), "base_rows": len(b),
+                      "code_shapes": [shape(r["code"]) for r in (full or b)[:4]],
+                      "desc_shapes": [shape(r["desc"])[:40] for r in (full or b)[:2]]})
+    diag["trial"] = trial
+    use_full = any(t["full_rows"] for t in trial)
+    use_base = any(t["base_rows"] for t in trial)
+    diag["mode"] = "full" if use_full else ("base" if use_base else "none")
+    if diag["mode"] == "none":
+        return []
+    queries = list(dict.fromkeys(skus if use_full else [base(x) for x in skus]))
+    cap = int(os.environ.get("NYC_MAX_LOOKUPS", "3000"))
+    diag["queries_wanted"] = len(queries)
+    start, out, seen = time.time(), [], set()
+    for q in queries[:cap]:
+        if time.time() - start > 1500:
+            diag["stopped_for_time"] = True
+            break
+        for r in parse_nyc_rows(ask(q)):
+            if r["code"] not in seen:
+                seen.add(r["code"])
+                out.append(r)
+        time.sleep(0.1)
+    diag["queries_run"] = min(len(queries), cap)
+    diag["rows_found"] = len(out)
+    return out
 
 
 def wheel_key(text):
@@ -276,11 +343,19 @@ def match_nyc(rows, products):
         k = wheel_key(r["desc"])
         if k:
             index.setdefault(k, []).append(r)
+    by_code = {code_norm(r["code"]): r for r in rows if r.get("code")}
     matched, unmatched, ambiguous = [], 0, 0
     for p in products:
+        for v in p["variants"]:
+            r = by_code.get(code_norm(v.get("sku") or ""))
+            if r:
+                v["_nyc_hit"] = r
         brand_words = set(norm(p.get("vendor", "")).split())
         words = [w for w in norm(p["title"]).split() if w not in brand_words]
         for v in p["variants"]:
+            if v.get("_nyc_hit"):
+                matched.append((p, v, v["_nyc_hit"]))
+                continue
             k = our_wheel_key(v)
             cands = [r for r in index.get(k, []) if all(w in norm(r["desc"]).split() for w in words)] if k else []
             if len(cands) == 1:
@@ -504,17 +579,17 @@ def main():
     try:
         if not os.environ.get("NYC_USER"):
             raise RuntimeError("NYC_USER / NYC_PASS secrets are not set")
-        rows = read_nyc()
-        rep["rows"] = len(rows)
-        from collections import Counter
-        rep["diag"] = {"makes": Counter(r["make"] for r in rows).most_common(15),
-                       "desc_shapes": [re.sub(r"[A-Za-z]", "x", re.sub(r"\d", "9", r["desc"]))[:50] for r in rows[:8]],
-                       **NYC_DIAG}
         prods = []
         for v in NYC_VENDORS:
             for p in sync.shopify_products(f'vendor:"{v}"'):
                 p["vendor"] = v
                 prods.append(p)
+        rows = read_nyc(prods)
+        rep["rows"] = len(rows)
+        from collections import Counter
+        rep["diag"] = {"makes": Counter(r["make"] for r in rows).most_common(15),
+                       "desc_shapes": [re.sub(r"[A-Za-z]", "x", re.sub(r"\d", "9", r["desc"]))[:50] for r in rows[:8]],
+                       **NYC_DIAG}
         matched, rep["unmatched"], rep["ambiguous"], rep["rows_with_size"] = match_nyc(rows, prods)
         rep["matched"] = len(matched)
         rep["our_variants"] = sum(len(p["variants"]) for p in prods)
