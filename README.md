@@ -45,7 +45,7 @@ Current: XForce, BC Racing and Alu-Cab on; Just Jap off. To test one supplier qu
 
 ## Daily digest email
 
-One email a day, about 10am Sydney, to `EMAIL_TO`. It covers **yesterday's 9pm check and today's 9am check**, plus any
+One email a day, about 10am Sydney, to `EMAIL_TO`. It covers **every scheduled check since yesterday 10am (four a day)**, plus any
 manual runs started in between (labelled "manual").
 
 **Flow.** `sync.yml` runs `sync.py` then `verify.py`; each run uploads a `sync-report` artifact (report.json, verify.json,
@@ -57,7 +57,7 @@ and sends. There is no other input and no fallback to a stray report.json.
 **Schedule and daylight saving.** Each local time has an AEDT and an AEST cron. `digest.py gate` judges the Sydney time the
 cron was *due*, not when GitHub started it, so exactly one fires each day (tested for every day of a year, including the
 switch days) and a late start still runs. The gate is its own small job, so ignored crons never queue behind a real run.
-Checks run at 9:17pm and 9:17am, off the hour when GitHub drops the most scheduled runs.
+Checks run every 6 hours at 3:17am, 9:17am, 3:17pm and 9:17pm, off the hour when GitHub drops the most scheduled runs.
 
 **No duplicates, automatic retry.** The digest tries at about 7:07, 7:37 and 8:07 or 8:37. The first attempt whose email is
 accepted uploads a `digest-sent-YYYY-MM-DD` artifact; later attempts see it and stop. A failed send records nothing, so

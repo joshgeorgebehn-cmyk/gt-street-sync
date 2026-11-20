@@ -1,7 +1,7 @@
 name: Daily digest email
 
-# One email a day, about 10am Sydney, to EMAIL_TO (default Joshua, Will and Billy), covering yesterday's 9pm check and
-# this morning's 9am check, plus any manual runs in between. How it stays reliable:
+# One email a day, about 10am Sydney, to EMAIL_TO (default Joshua, Will and Billy), covering every check since yesterday 10am (four a day) and
+# today's, plus any manual runs in between. How it stays reliable:
 #   - Two crons per attempt (AEDT and AEST). digest.py gate looks at the Sydney time each cron was *due*, so exactly one
 #     fires per attempt on every day of the year, and a late start by GitHub is never skipped.
 #   - Three attempts: about 7:07, 7:37 and 8:07 (or 8:37) Sydney. The first that sends records a "digest-sent-DATE"

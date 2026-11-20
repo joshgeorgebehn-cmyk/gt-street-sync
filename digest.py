@@ -9,19 +9,20 @@
   python3 digest.py sent DATE          prints sent=true if a digest for that Sydney date was already accepted
   python3 digest.py collect            waits for the expected checks, downloads their reports, writes manifest.json
 
-The digest covers yesterday's 9pm check and today's 9am check (both scheduled), plus any manual runs started in
-that period, which are labelled as manual. Each expected check is reported as ok, failed, running, missing or
+The digest covers every scheduled check due since yesterday 10am (four a day, every 6 hours), plus any manual runs
+started in that period, which are labelled as manual. Each expected check is reported as ok, failed, running, missing or
 without a usable report; notify.py turns those into the email.
 """
 from __future__ import annotations
 
-import datetime as dt, json, os, subprocess, sys, time
+import datetime as dt, json, os, re, subprocess, sys, time
 from zoneinfo import ZoneInfo
 
 SYD = ZoneInfo("Australia/Sydney")
 UTC = dt.timezone.utc
 SYNC_TIMEOUT_MIN = 355
-EXPECTED = (("midday", 21, -1, "9pm check"), ("morning", 9, 0, "9am check"))  # slot, Sydney hour, day offset, label
+SLOT_HOURS = (3, 9, 15, 21)  # Sydney hours of the four daily checks (minute 17), every 6 hours
+SLOT_MINUTE = 17
 
 
 def scheduled_moment(cron: str, started: dt.datetime) -> dt.datetime:
@@ -70,15 +71,33 @@ def parse(t: str) -> dt.datetime:
     return dt.datetime.fromisoformat(t.replace("Z", "+00:00"))
 
 
-def slot_for(run: dict, today: dt.date) -> str | None:
-    """Which expected check a scheduled run belongs to, from its Sydney start time."""
-    loc = parse(run["created_at"]).astimezone(SYD)
-    if loc.date() == today and loc.hour < 7:
-        return "midday"  # the 9pm check, started late after midnight (slot key kept as the earlier check)
-    if loc.date() == today and loc.hour >= 7:
-        return "morning"
-    if loc.date() == today - dt.timedelta(days=1) and loc.hour >= 18:
-        return "midday"
+SCHEDULED_TITLE = re.compile(r"Scheduled sync \((.+)\)")
+
+
+def due_slots(now: dt.datetime) -> list[dt.datetime]:
+    """The checks that should have started in the digest window (yesterday 10am Sydney up to now), as UTC instants."""
+    today = now.astimezone(SYD).date()
+    start = dt.datetime.combine(today - dt.timedelta(days=1), dt.time(10), SYD)
+    out = []
+    for d in (today - dt.timedelta(days=1), today):
+        for h in SLOT_HOURS:
+            due = dt.datetime.combine(d, dt.time(h, SLOT_MINUTE), SYD)
+            if start <= due <= now:
+                out.append(due.astimezone(UTC))
+    return out
+
+
+def slot_for(run: dict, slots: list[dt.datetime]) -> dt.datetime | None:
+    """Which due check a run belongs to. A GitHub scheduled run carries its cron in its title, so its due time is exact
+    even when GitHub starts it hours late; the external timer's runs go to the latest due check before they started."""
+    created = parse(run["created_at"])
+    m = SCHEDULED_TITLE.search(run.get("display_title") or "")
+    if m:
+        moment = scheduled_moment(m.group(1), created)
+        return next((s for s in slots if abs((s - moment).total_seconds()) < 120), None)
+    if (run.get("display_title") or "").startswith(EXTERNAL_TITLE):
+        before = [s for s in slots if s <= created and (created - s).total_seconds() < 6 * 3600]
+        return max(before) if before else None
     return None
 
 
@@ -93,26 +112,21 @@ def list_runs() -> list[dict]:
 
 
 def classify(runs: list[dict], now: dt.datetime, report_check=has_report) -> list[dict]:
-    """One entry per expected check (found or not) plus manual runs in the period, oldest first."""
+    """One entry per due check (found or not) plus manual runs in the window, oldest first."""
     today = now.astimezone(SYD).date()
     period_start = dt.datetime.combine(today - dt.timedelta(days=1), dt.time(10), SYD)
-    found: dict[str, list[dict]] = {"midday": [], "morning": []}
+    slots = due_slots(now)
+    found: dict[dt.datetime, list[dict]] = {s: [] for s in slots}
     manual = []
     for r in runs:
         created = parse(r["created_at"])
-        if created < period_start or created > now:
-            continue
-        if r["event"] == "schedule":
-            s = slot_for(r, today)
+        if r["event"] == "schedule" or (r["event"] == "workflow_dispatch" and (r.get("display_title") or "").startswith(EXTERNAL_TITLE)):
+            s = slot_for(r, slots)
             if s:
                 found[s].append(r)
-        elif r["event"] == "workflow_dispatch" and (r.get("display_title") or "").startswith(EXTERNAL_TITLE):
-            s = slot_for(r, today)  # the external timer's runs count as the scheduled checks
-            if s:
-                found[s].append(r)
-            else:
+            elif r["event"] == "workflow_dispatch" and period_start <= created <= now:
                 manual.append(r)
-        elif r["event"] == "workflow_dispatch":
+        elif r["event"] == "workflow_dispatch" and period_start <= created <= now:
             manual.append(r)
 
     def entry(r: dict, label: str, expected: bool) -> dict:
@@ -129,14 +143,14 @@ def classify(runs: list[dict], now: dt.datetime, report_check=has_report) -> lis
                 "created": r["created_at"], "status": r["status"], "conclusion": r.get("conclusion"), "state": state}
 
     checks = []
-    for slot, hour, off, label in EXPECTED:
-        day = today + dt.timedelta(days=off)
-        nice = f"{label} {day.strftime('%a %d %b')}"
+    for slot in slots:
+        loc = slot.astimezone(SYD)
+        nice = f"{loc.strftime('%-I%p').lower()} check {loc.strftime('%a %d %b')}"
         # Gated duplicates finish in seconds with no report; the real run is the one that produced (or is producing) one.
         real = [r for r in found[slot] if r["status"] != "completed" or r.get("conclusion") != "success" or report_check(r["id"])]
         if not real:
-            due = dt.datetime.combine(day, dt.time(hour), SYD).astimezone(UTC).isoformat().replace("+00:00", "Z")
-            checks.append({"label": nice, "expected": True, "state": "missing", "run_id": None, "url": "", "created": None, "due": due})
+            checks.append({"label": nice, "expected": True, "state": "missing", "run_id": None, "url": "", "created": None,
+                           "due": slot.isoformat().replace("+00:00", "Z")})
         else:
             checks.append(entry(max(real, key=lambda r: r["created_at"]), nice, True))
     for r in manual:

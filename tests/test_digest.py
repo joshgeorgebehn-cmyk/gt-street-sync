@@ -272,13 +272,14 @@ class Scheduling(unittest.TestCase):
     def t(self, s): return dt.datetime.fromisoformat(s).replace(tzinfo=UTC)
 
     def test_exactly_one_cron_per_attempt_every_day(self):  # 26, 27
-        crons = {"sync_am": ["17 22 * * *", "17 23 * * *"], "sync_pm": ["17 10 * * *", "17 11 * * *"]}
+        crons = {3: ["17 16 * * *", "17 17 * * *"], 9: ["17 22 * * *", "17 23 * * *"],
+                 15: ["17 4 * * *", "17 5 * * *"], 21: ["17 10 * * *", "17 11 * * *"]}
         day = dt.date(2026, 1, 1)
         while day < dt.date(2027, 1, 1):
-            for name, pair in crons.items():
-                hours = [9] if name == "sync_am" else [21]
-                went = [c for c in pair if digest.gate(c, hours, dt.datetime.combine(day, dt.time(int(c.split()[1]), 20), UTC))]
-                self.assertEqual(len(went), 1, f"{name} on {day}: {went}")
+            for hour, pair in crons.items():
+                went = [c for c in pair if digest.gate(c, [3, 9, 15, 21], dt.datetime.combine(day, dt.time(int(c.split()[1]), 20), UTC))
+                        and digest.scheduled_moment(c, dt.datetime.combine(day, dt.time(int(c.split()[1]), 20), UTC)).astimezone(digest.SYD).hour == hour]
+                self.assertEqual(len(went), 1, f"{hour} on {day}: {went}")
             day += dt.timedelta(days=1)
 
     def test_digest_attempts_land_10_or_11_am_and_never_three_misses(self):
@@ -301,28 +302,40 @@ def run(i, event, created, status="completed", conclusion="success"):
     return {"id": i, "event": event, "created_at": created, "status": status, "conclusion": conclusion, "html_url": f"https://github.com/x/runs/{i}"}
 
 
+def sched(i, created, cron, **kw):
+    return {**run(i, "schedule", created, **kw), "display_title": f"Scheduled sync ({cron})"}
+
+
 class Selection(unittest.TestCase):
-    NOW = dt.datetime(2026, 11, 17, 23, 10, tzinfo=UTC)  # 10:10am Wed Sydney
+    NOW = dt.datetime(2026, 11, 17, 23, 10, tzinfo=UTC)  # 10:10am Wed 18 Nov Sydney
+    # Due since Tue 10am: Tue 3:17pm (04:17Z), Tue 9:17pm (10:17Z), Wed 3:17am (16:17Z), Wed 9:17am (22:17Z)
 
-    def test_picks_the_two_expected_and_labels_manual(self):  # 3 (selection)
-        runs = [run(1, "schedule", "2026-11-17T10:17:30Z"), run(2, "schedule", "2026-11-17T11:17:30Z"),   # 9:17pm real, 10:17pm gated
-                run(3, "schedule", "2026-11-17T22:17:40Z"), run(4, "schedule", "2026-11-17T23:05:40Z"),   # 9:17am real, 10:05am gated
-                run(5, "workflow_dispatch", "2026-11-17T12:25:58Z"), run(6, "schedule", "2026-11-15T01:17:00Z")]
-        checks = digest.classify(runs, self.NOW, report_check=lambda i: i in (1, 3, 5))
-        self.assertEqual([(c["run_id"], c["expected"]) for c in checks], [(1, True), (5, False), (3, True)])
+    def test_four_checks_and_manual_labelled(self):
+        runs = [sched(1, "2026-11-17T04:17:30Z", "17 4 * * *"), sched(2, "2026-11-17T05:17:30Z", "17 5 * * *"),   # real, gated duplicate
+                sched(3, "2026-11-17T10:17:30Z", "17 10 * * *"), sched(4, "2026-11-17T16:20:00Z", "17 16 * * *"),
+                sched(5, "2026-11-17T22:17:40Z", "17 22 * * *"), sched(6, "2026-11-17T23:05:40Z", "17 23 * * *"),
+                run(7, "workflow_dispatch", "2026-11-17T12:25:58Z"), sched(8, "2026-11-15T01:17:00Z", "17 22 * * *")]
+        checks = digest.classify(runs, self.NOW, report_check=lambda i: i in (1, 3, 4, 5, 7))
+        self.assertEqual([(c["run_id"], c["expected"]) for c in checks], [(1, True), (3, True), (7, False), (4, True), (5, True)])
 
-    def test_missing_expected_check(self):  # 16
-        checks = digest.classify([run(1, "schedule", "2026-11-17T10:17:30Z")], self.NOW, report_check=lambda i: True)
-        self.assertEqual([c["state"] for c in checks], ["done", "missing"])
+    def test_late_start_still_belongs_to_its_slot(self):
+        # The 9:17pm check started 4 hours late (14:30Z): still reported as the 9:17pm check.
+        checks = digest.classify([sched(3, "2026-11-17T14:30:00Z", "17 10 * * *")], self.NOW, report_check=lambda i: True)
+        self.assertEqual([c["state"] for c in checks], ["missing", "done", "missing", "missing"])
+        self.assertTrue(checks[1]["label"].startswith("9pm check"))
 
-    def test_running_and_overrun(self):  # 17, 18
-        r = run(3, "schedule", "2026-11-17T22:17:40Z", status="in_progress", conclusion=None)
+    def test_missing_expected_checks(self):
+        checks = digest.classify([sched(1, "2026-11-17T04:17:30Z", "17 4 * * *")], self.NOW, report_check=lambda i: True)
+        self.assertEqual([c["state"] for c in checks], ["done", "missing", "missing", "missing"])
+
+    def test_running_and_overrun(self):
+        r = sched(5, "2026-11-17T22:17:40Z", "17 22 * * *", status="in_progress", conclusion=None)
         self.assertEqual(digest.classify([r], self.NOW, report_check=lambda i: False)[-1]["state"], "running")
-        self.assertEqual(digest.classify([r], self.NOW + dt.timedelta(hours=7), report_check=lambda i: False)[-1]["state"], "timed_out")
+        self.assertEqual(digest.classify([r], self.NOW + dt.timedelta(hours=7), report_check=lambda i: False)[-2]["state"], "timed_out")
 
     def test_failed_run_counts_as_the_check(self):
-        checks = digest.classify([run(3, "schedule", "2026-11-17T22:17:40Z", conclusion="failure")], self.NOW, report_check=lambda i: False)
-        self.assertEqual((checks[-1]["run_id"], checks[-1]["conclusion"]), (3, "failure"))
+        checks = digest.classify([sched(5, "2026-11-17T22:17:40Z", "17 22 * * *", conclusion="failure")], self.NOW, report_check=lambda i: False)
+        self.assertEqual((checks[-1]["run_id"], checks[-1]["conclusion"]), (5, "failure"))
 
     def test_wait_loop_waits_then_reports(self):  # D, E
         now = dt.datetime.now(UTC); syd = now.astimezone(digest.SYD)
@@ -357,7 +370,8 @@ class ExternalTimer(unittest.TestCase):
         t = lambda i, c: {**run(i, "workflow_dispatch", c), "display_title": "Scheduled check (external timer)"}
         checks = digest.classify([t(1, "2026-11-17T10:17:05Z"), t(2, "2026-11-17T22:17:05Z"),
                                   run(3, "workflow_dispatch", "2026-11-17T12:25:58Z")], self.NOW, report_check=lambda i: True)
-        self.assertEqual([(c["run_id"], c["expected"]) for c in checks], [(1, True), (3, False), (2, True)])
+        got = [(c["run_id"], c["expected"]) for c in checks if c["run_id"]]
+        self.assertEqual(got, [(1, True), (3, False), (2, True)])
 
     def test_github_backup_stands_down_after_a_timer_run(self):
         recent = dt.datetime.now(UTC).isoformat().replace("+00:00", "Z")

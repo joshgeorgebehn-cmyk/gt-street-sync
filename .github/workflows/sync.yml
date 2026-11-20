@@ -1,18 +1,22 @@
 name: Supplier price and stock sync
-run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.source == 'scheduler' && 'Scheduled check (external timer)' || 'Supplier price and stock sync' }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.source == 'scheduler' && 'Scheduled check (external timer)' || github.event_name == 'schedule' && format('Scheduled sync ({0})', github.event.schedule) || 'Supplier price and stock sync' }}
 
-# 9pm and 9am Sydney every day: each full run covers every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
+# Every 6 hours (3:17am, 9:17am, 3:17pm, 9:17pm Sydney): each full run covers every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
 # is read live from its own website, nothing cached, and the results are applied to Shopify. Then an independent
 # recheck of every amended product. Nothing is emailed from here: the 10am Daily digest covers every run, manual ones included.
 on:
   schedule:
     # GitHub schedules in UTC: one entry for daylight time, one for standard time. digest.py gate keeps the one whose
-    # due time is 9pm or 9am in Sydney (judged on the due time, so a late start by GitHub still runs). :17 past avoids
+    # due time is 3, 9, 15 or 21 o'clock in Sydney (judged on the due time, so a late start by GitHub still runs). :17 past avoids
     # the top of the hour, when GitHub is busiest and most likely to drop scheduled runs.
-    - cron: "17 10 * * *"   # 9:17pm AEDT
-    - cron: "17 11 * * *"   # 9:17pm AEST
+    - cron: "17 16 * * *"   # 3:17am AEDT
+    - cron: "17 17 * * *"   # 3:17am AEST
     - cron: "17 22 * * *"   # 9:17am AEDT
     - cron: "17 23 * * *"   # 9:17am AEST
+    - cron: "17 4 * * *"    # 3:17pm AEDT
+    - cron: "17 5 * * *"    # 3:17pm AEST
+    - cron: "17 10 * * *"   # 9:17pm AEDT
+    - cron: "17 11 * * *"   # 9:17pm AEST
   workflow_dispatch:
     inputs:
       only:
@@ -42,13 +46,13 @@ jobs:
       go: ${{ steps.gate.outputs.go }}
     steps:
       - uses: actions/checkout@v4
-      - name: "9pm and 9am Sydney every day, every supplier"
+      - name: "Every 6 hours Sydney time, every supplier"
         id: gate
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: python3 digest.py gate "${{ github.event.schedule }}" 9 21 | tee -a "$GITHUB_OUTPUT"
+        run: python3 digest.py gate "${{ github.event.schedule }}" 3 9 15 21 | tee -a "$GITHUB_OUTPUT"
   sync:
     needs: gate
     if: needs.gate.outputs.go == 'true'
