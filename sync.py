@@ -530,6 +530,7 @@ def main():
 
     # Other suppliers with a public Shopify catalogue (suppliers.json).
     report["suppliers"] = {}
+    claimed: dict[str, str] = {}  # variant id -> supplier that owns it; a variant matched by two suppliers is written once
     for cfg in load_suppliers():
         name_ = cfg["name"]
         by_sku, by_title = shopify_supplier_catalogue(cfg)
@@ -549,6 +550,10 @@ def main():
                     hit = by_title.get(title_key(p["title"], cfg.get("brand", "")))
                 if not hit:
                     rep["unmatched"].append(f"{p['title']} ({v['sku'] or 'no SKU'})"); continue
+                if v["id"] in claimed:  # e.g. an XForce product also tagged supplier:justjap: first supplier in suppliers.json wins
+                    rep.setdefault("already_claimed", []).append(f"{p['title']} (kept with {claimed[v['id']]})")
+                    continue
+                claimed[v["id"]] = name_
                 rep["variants_matched"] += 1
                 matched.append((p, v, hit))
         # Stock: read every matched product's page on the supplier's site for the exact quantity and back order setting.
