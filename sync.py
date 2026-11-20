@@ -726,6 +726,19 @@ def create_variants(report, specs):
         except Exception as e:
             report["errors"].append({"sort_options": p["title"], "error": str(e)[:200]})
 
+def merge_variant_inputs(vs):
+    """Combine several inputs for one variant id into one (later values win, inventoryItem is merged)."""
+    merged = {}
+    for x in vs:
+        m = merged.setdefault(x["id"], {"id": x["id"]})
+        for k, val in x.items():
+            if k == "inventoryItem":
+                m.setdefault(k, {}).update(val)
+            elif k != "id":
+                m[k] = val
+    return list(merged.values())
+
+
 def finish(report, started, stock_targets, updates, new_specs=(), unflag=(), tag_add=(), tag_remove=()):
     if new_specs:
         report["new_variants_planned"] = [f"{sp['p']['title']} {' '.join(sp['opts'])}" for sp in new_specs][:500]
@@ -741,6 +754,7 @@ def finish(report, started, stock_targets, updates, new_specs=(), unflag=(), tag
             try: gql(TAGRM_M, {"id": pid})
             except Exception as e: report["errors"].append({"untag": str(e)[:200]})
         for pid, vs in updates.items():
+            vs = merge_variant_inputs(vs)  # one input per variant: Shopify rejects the same variant id twice
             for i in range(0, len(vs), 100):
                 try:
                     errs = gql(BULK_M, {"pid": pid, "v": vs[i:i + 100]})["productVariantsBulkUpdate"]["userErrors"]

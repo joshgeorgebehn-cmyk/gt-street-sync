@@ -652,6 +652,7 @@ def compare(name, matched_states, rep):
                 label = {"in": "In stock", "low": f"Low stock ({q} left)", "backorder": "Back order", "out": "Out of stock"}[state]
                 rep["examples"].append({"product": p["title"], "variant": " / ".join(v["opts"].values()), "now": now, "portal": label,
                                         "handle": p.get("handle", "")})
+        rep.setdefault("stock_ids", []).append(v["id"])
         targets[v["item"]] = q if state != "in" else STOCK_QTY
         want = "CONTINUE" if state == "backorder" else "DENY"
         if v["tracked"] is not True or v["policy"] != want:
@@ -780,6 +781,11 @@ def main():
         result["applied"] = {"quantities_updated": report.get("stock_quantities_updated", 0),
                              "policies_updated": len(all_policies), "errors": report["errors"][:10]}
 
+    if APPLY:  # variants whose stock a portal now sets: the re-check must not compare these with CNC
+        ids = sorted({i for n in result["portals"].values() for i in n.get("stock_ids", [])})
+        json.dump(ids, open("portals_ids.json", "w"))
+    for n in result["portals"].values():
+        n.pop("stock_ids", None)
     json.dump(result, open("portals.json", "w"), indent=1)
     mode = "applied" if APPLY else "review mode, nothing changed"
     lines = [f"# Dealer portals ({mode})", ""]

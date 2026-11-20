@@ -81,3 +81,15 @@ class NycEntities(unittest.TestCase):
                '<td class="BuyingTableDesc">Black Rock Fury 18x9 5x127 &#x2B;12 Satin</td></tr>')
         r = portals.parse_nyc_rows(row)[0]
         self.assertEqual(portals.wheel_key(r["desc"]), ("18x9", "5x127", "+12"))
+
+
+class MergeInputs(unittest.TestCase):
+    def test_same_variant_is_sent_once(self):
+        import sync
+        out = sync.merge_variant_inputs([{"id": "v1", "price": "10.00"},
+                                         {"id": "v1", "inventoryPolicy": "DENY", "inventoryItem": {"tracked": True}},
+                                         {"id": "v2", "price": "5.00"},
+                                         {"id": "v1", "inventoryItem": {"sku": "A"}}])
+        self.assertEqual(len(out), 2)
+        v1 = [x for x in out if x["id"] == "v1"][0]
+        self.assertEqual(v1, {"id": "v1", "price": "10.00", "inventoryPolicy": "DENY", "inventoryItem": {"tracked": True, "sku": "A"}})

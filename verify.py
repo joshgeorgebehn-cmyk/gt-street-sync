@@ -60,6 +60,10 @@ def main():
         others = sorted(amended - set(big) - set(prices))
         rnd.shuffle(prices); rnd.shuffle(others)
         amended = set((big + prices + others)[:cap])
+    try:
+        portal_ids = set(json.load(open("portals_ids.json")))
+    except Exception:
+        portal_ids = set()
     cnc_all = r.get("cnc_applied", [])
     cnc = [a for a in cnc_all if a["variant"] in amended]
     rest = [a for a in cnc_all if a["variant"] not in amended]
@@ -88,7 +92,7 @@ def main():
         w = want_price(pg["price"])
         if abs(float(n["price"]) - w) > 0.005:
             bad.append(f"PRICE {a['name']}: GT Street ${float(n['price']):.2f}, CNC page shows ${pg['price']:.2f} (expected ${w:.2f})")
-        if a.get("own"): continue  # GT Street's own counted stock: price checked, stock not synced
+        if a.get("own") or a["variant"] in portal_ids: continue  # own counted stock, or stock set by a dealer portal: price checked, stock not compared with CNC
         cs = "out" if pg["out"] else ("backorder" if pg.get("backorder") else "in")
         ss = shop_state(n)
         if ss != cs:
