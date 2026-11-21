@@ -25,7 +25,7 @@ on:
         type: string
         default: ""
       dry_run:
-        description: "Tick for a dry run of the dealer portals: they are read and compared, nothing is changed in Shopify, even if PORTALS_APPLY is 1."
+        description: "Tick for a dry run: everything is read and reported (prices, stock, dealer portals, new products) but nothing is changed in Shopify."
         type: boolean
         default: false
       full_cnc:
@@ -99,7 +99,7 @@ jobs:
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
           SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-          DRY_RUN: "0"
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
@@ -113,7 +113,7 @@ jobs:
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
           SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-          DRY_RUN: "0"
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
@@ -126,7 +126,7 @@ jobs:
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
           SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-          DRY_RUN: "0"
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
@@ -139,7 +139,7 @@ jobs:
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
           SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-          DRY_RUN: "0"
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           PRICE_OFFSET: ${{ vars.PRICE_OFFSET || '1' }}
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}

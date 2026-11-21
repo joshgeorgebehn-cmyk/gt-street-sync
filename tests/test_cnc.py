@@ -33,5 +33,24 @@ class NewOnCnc(unittest.TestCase):
         from unittest import mock
         with mock.patch.object(sync, "cnc_newest", return_value=newest):
             out, not_listed = sync.new_cnc_ranges([{"title": "JSR ST21"}], idx)
-        self.assertEqual(out, [{"name": "Jsr St57 Shadow", "sizes": 1, "from": 360.0, "url": "https://c/jsr-st57-shadow-18x8-5x120-wheel/"}])
+        self.assertEqual(out, [{"name": "Jsr St57 Shadow", "range": "jsr st57 shadow", "sizes": 1, "from": 360.0, "url": "https://c/jsr-st57-shadow-18x8-5x120-wheel/"}])
         self.assertEqual(not_listed, 1)
+
+
+class Title(unittest.TestCase):
+    def test_title_from_cnc_heading(self):
+        h = '<h1 class="product_title entry-title">BLACK ROCK CAGE DARK BRONZE WITH BLACK RING 22X10.5 6X139.7 WHEEL</h1>'
+        self.assertEqual(sync.cnc_title(h), "Black Rock Cage Dark Bronze With Black Ring")
+        self.assertEqual(sync.cnc_title('<h1 class="product_title entry-title">GT FORM HF5.1 HYBRID FORGED BRUSHED GUNMETAL 22X10.5 5X108 WHEEL</h1>'),
+                         "GT Form HF5.1 Hybrid Forged Brushed Gunmetal")
+        self.assertEqual(sync.cnc_title('<h1 class="product_title entry-title">JSR ST57 SHADOW CHROME 18X8 5X120 WHEEL</h1>'), "JSR ST57 Shadow Chrome")
+
+    def test_product_input_is_a_draft_with_every_variant(self):
+        spec = {"title": "JSR ST57 Shadow Chrome", "vendor": "JSR", "image": "https://c/i.jpg",
+                "variants": [{"opts": ("18x8", "5x120", "+35"), "price": 359.0, "state": "in", "sku": "ab-P35"},
+                             {"opts": ("18x8", "5x120", "+40"), "price": 359.0, "state": "out", "sku": ""}]}
+        i = sync.product_input(spec, "gid://shopify/Location/1")
+        self.assertEqual((i["status"], i["vendor"], len(i["variants"])), ("DRAFT", "JSR", 2))
+        self.assertIn("status:review", i["tags"])
+        self.assertEqual([v["inventoryQuantities"][0]["quantity"] for v in i["variants"]], [20, 0])
+        self.assertNotIn("sku", i["variants"][1]["inventoryItem"])

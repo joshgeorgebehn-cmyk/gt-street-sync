@@ -353,7 +353,7 @@ def new_cnc_ranges(products, idx):
         if not r or r in ours or r in seen: continue
         seen.add(r)
         ps = [price_of[x] for x in by_range[r] if price_of.get(x)]
-        out.append({"name": r.title(), "sizes": len(by_range[r]), "from": min(ps) if ps else None, "url": u})
+        out.append({"name": r.title(), "range": r, "sizes": len(by_range[r]), "from": min(ps) if ps else None, "url": u})
     not_listed = sum(1 for r in by_range if r not in ours)
     return out, not_listed
 
@@ -489,6 +489,8 @@ def main():
     if run_cnc and products and len(idx) >= 3000:
         try:
             report["new_on_cnc"], report["cnc_ranges_not_listed"] = new_cnc_ranges(products, idx)
+            if CREATE_NEW_PRODUCTS and source == "admin":
+                load_new_ranges(report, report["new_on_cnc"], idx, {p["title"].lower() for p in products})
         except Exception as e:
             report["errors"].append(f"New product check on CNC failed: {e}")
 
@@ -849,6 +851,115 @@ def create_variants(report, specs):
             if errs: report["errors"].append({"sort_options": p["title"], "errors": errs[:3]})
         except Exception as e:
             report["errors"].append({"sort_options": p["title"], "error": str(e)[:200]})
+
+NEW_RANGE_LIMIT = int(os.environ.get("NEW_RANGE_LIMIT", "5"))  # new ranges loaded per run; the rest wait for the next run
+CREATE_NEW_PRODUCTS = os.environ.get("CREATE_NEW_PRODUCTS", "1") == "1"
+BRAND_NAMES = {"gt form": "GT Form", "jsr": "JSR", "black rock": "Black Rock"}
+PRODUCT_SET_M = """mutation($i:ProductSetInput!){ productSet(input:$i, synchronous:true){ product{ id handle title variants(first:1){ nodes{ id } } }
+  userErrors{ field message code } } }"""
+
+def cnc_title(html_text):
+    """'BLACK ROCK CAGE DARK BRONZE WITH BLACK RING 20X9 6X135 WHEEL' -> 'Black Rock Cage Dark Bronze With Black Ring'."""
+    m = re.search(r'class="product_title entry-title"[^>]*>(.*?)</h1>', html_text, re.S)
+    if not m: return ""
+    toks = html.unescape(re.sub("<[^>]+>", "", m.group(1))).split()
+    cut = next((i for i, t in enumerate(toks) if re.match(r"^\d{2}x\d+(?:\.\d+)?$", t.lower())), len(toks))
+    out = []
+    for t in toks[:cut]:
+        low = t.lower()
+        if low in ("gt", "form") and not out: out.append("GT" if low == "gt" else "Form")
+        elif low == "jsr": out.append("JSR")
+        elif any(c.isdigit() for c in t): out.append(t.upper())
+        else: out.append(t.capitalize())
+    return " ".join(out)
+
+def build_new_product(rng, idx):
+    """Read every CNC page of a new range and describe the product to create. Returns (spec, reason); spec is None when skipped."""
+    pages = sorted((k, u) for k, u in idx.items() if k[0] == rng)
+    brand = next((b for b in BRAND_NAMES if rng == b or rng.startswith(b + " ")), None)
+    if not brand: return None, "brand not recognised"
+    title, image, variants = "", "", []
+    for (r, sz, pcd), u in pages:
+        st, t = http(u); time.sleep(CNC_DELAY)
+        if st != 200 or not t: continue
+        if not title: title = cnc_title(t)
+        if not image:
+            m = re.search(r'<meta property="og:image" content="([^"]+)"', t)
+            image = m.group(1) if m else ""
+        price, why, _ = cnc_price(t)
+        if price is None: continue
+        attrs = {}
+        tab = re.search(r"woocommerce-product-attributes(.*?)</table>", t, re.S)
+        if tab:
+            for a, b in re.findall(r"<th[^>]*>(.*?)</th>\s*<td[^>]*>(.*?)</td>", tab.group(1), re.S):
+                attrs[re.sub("<[^>]+>", "", a).strip().lower()] = html.unescape(re.sub("<[^>]+>", "", b)).strip()
+        offs = [o.strip().replace(" ", "") for o in attrs.get("offset", "").split(",") if o.strip()]
+        offs = [("+" + o) if re.match(r"^\d", o) else o for o in offs]
+        stock = (re.findall(r'class="stock[^"]*">([^<]*)', t) or [""])[0].strip().lower()
+        state = "out" if stock == "out of stock" else "backorder" if "back" in stock and "order" in stock else "in"
+        msku = re.search(r'class="sku">\s*([^<\s][^<]*?)\s*<', t)
+        for o in offs:
+            sfx = o.replace("+", "P").replace("-", "M")
+            p_ = round(price - PRICE_OFFSET, 2)
+            variants.append({"opts": (sz, pcd, o), "price": p_ if p_ > 0 else price, "state": state,
+                             "sku": f"{msku.group(1).strip()}-{sfx}" if msku else ""})
+    if not title: return None, "could not read the product title"
+    if norm(title) != rng: return None, f"title '{title}' would not match CNC range '{rng}', skipped to avoid a duplicate"
+    if not variants: return None, "no sizes with a price and offsets could be read"
+    return {"title": title, "vendor": BRAND_NAMES[brand], "image": image, "variants": variants}, ""
+
+def product_input(spec, loc):
+    sizes = sorted({v["opts"][0] for v in spec["variants"]}, key=lambda x: _num(x))
+    pcds = sorted({v["opts"][1] for v in spec["variants"]}, key=lambda x: _num(x))
+    offs = sorted({v["opts"][2] for v in spec["variants"]}, key=lambda x: _num(x))
+    t, vendor = spec["title"], spec["vendor"]
+    body = (f"<p>The {html.escape(t)} is sold and priced per wheel, so select the quantity your vehicle needs.</p> "
+            f"<p><strong>Available rim sizes:</strong> {', '.join(sizes)}.<br> <strong>Available PCDs:</strong> {', '.join(pcds)}.<br> "
+            f"<strong>Available offsets:</strong> {', '.join(offs)}.</p> "
+            f"<p>Each variant has been built from the available {html.escape(vendor)} fitment data. Not every size, PCD and offset combination is available for every wheel. "
+            f"Please select the exact variant required before ordering.</p> "
+            f"<p>Please confirm fitment before ordering, including rim size, PCD, offset, brake clearance, guard clearance and load rating.</p>")
+    inp = {"title": t, "vendor": vendor, "productType": "Wheels", "status": "DRAFT", "descriptionHtml": body,
+           "tags": [vendor, "NYC Wheels", "Drop Ship", "Rims", "Wheels", "status:review", "import:" + datetime.date.today().isoformat()],
+           "seo": {"description": f"{t}. Fitment checked on every order, delivered Australia wide."},
+           "productOptions": [{"name": "Rim Size", "values": [{"name": x} for x in sizes]}, {"name": "PCD", "values": [{"name": x} for x in pcds]},
+                              {"name": "Offset", "values": [{"name": x} for x in offs]}],
+           "variants": [{"optionValues": [{"optionName": "Rim Size", "name": v["opts"][0]}, {"optionName": "PCD", "name": v["opts"][1]},
+                                          {"optionName": "Offset", "name": v["opts"][2]}],
+                         "price": f"{v['price']:.2f}", "inventoryPolicy": "CONTINUE" if v["state"] == "backorder" else "DENY",
+                         "inventoryItem": {"tracked": True, **({"sku": v["sku"]} if v["sku"] else {})},
+                         "inventoryQuantities": [{"locationId": loc, "name": "available", "quantity": STOCK_QTY if v["state"] == "in" else 0}]}
+                        for v in spec["variants"]]}
+    if spec.get("image"):
+        inp["files"] = [{"originalSource": spec["image"], "contentType": "IMAGE", "alt": t}]
+    return inp
+
+def load_new_ranges(report, entries, idx, existing_titles):
+    """Create each new CNC wheel range as a DRAFT product (priced CNC less $1, stocked as CNC shows), tagged status:review.
+    Never published: images, collections and a read-through are still done by a person. A range already on the store is skipped."""
+    loc = None if DRY_RUN else gql(LOC_Q)["locations"]["nodes"][0]["id"]
+    made = 0
+    for e in entries:
+        if e["name"].lower() in existing_titles:
+            e["status"] = "already on the site"; continue
+        if made >= NEW_RANGE_LIMIT:
+            e["status"] = "queued for the next run"; continue
+        spec, why = build_new_product(e["range"], idx)
+        if spec is None:
+            e["status"] = f"not loaded: {why}"; continue
+        e["title"] = spec["title"]; e["variants"] = len(spec["variants"])
+        if DRY_RUN:
+            e["status"] = "would be loaded as a draft (dry run)"; made += 1; continue
+        try:
+            res = gql(PRODUCT_SET_M, {"i": product_input(spec, loc)})["productSet"]
+        except Exception as ex:
+            e["status"] = f"not loaded: {str(ex)[:150]}"; report["errors"].append({"new_product": spec["title"], "error": str(ex)[:300]}); continue
+        if res["userErrors"] or not res.get("product"):
+            e["status"] = f"not loaded: {json.dumps(res['userErrors'][:2])[:150]}"
+            report["errors"].append({"new_product": spec["title"], "errors": res["userErrors"][:3]}); continue
+        made += 1
+        e["status"] = "loaded as a draft"; e["product_id"] = res["product"]["id"]; e["handle"] = res["product"]["handle"]
+        report.setdefault("new_products_created", []).append({"title": spec["title"], "id": res["product"]["id"], "variants": len(spec["variants"])})
 
 def merge_variant_inputs(vs):
     """Combine several inputs for one variant id into one (later values win, inventoryItem is merged)."""

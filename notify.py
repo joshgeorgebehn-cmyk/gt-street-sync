@@ -425,13 +425,18 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
     if nc:
         rows = []
         for x in nc[:10]:
-            url = safe_url(x.get("url", ""))
-            left = f'<a href="{esc(url)}" style="color:{INK};text-decoration:none">{esc(x.get("name", ""))}</a>' if url else esc(x.get("name", ""))
+            pid = str(x.get("product_id", "")).rsplit("/", 1)[-1]
+            url = (f"https://admin.shopify.com/store/srbc11-w2/products/{pid}" if pid.isdigit() else safe_url(x.get("url", "")))
+            nm = esc(x.get("title") or x.get("name", ""))
+            left = f'<a href="{esc(url)}" style="color:{INK};text-decoration:none">{nm}</a>' if url else nm
             sz = x.get("sizes", 0)
-            rows.append(pair_row(left, f'{sz} size{"s" if sz != 1 else ""}' + (f', from {money(x["from"])}' if x.get("from") else "")))
+            detail = f'{x.get("variants")} variants' if x.get("variants") else f'{sz} size{"s" if sz != 1 else ""}' + (f', from {money(x["from"])}' if x.get("from") else "")
+            col = RED if str(x.get("status", "")).startswith("not loaded") else GREY
+            rows.append(pair_row(left, f'{esc(detail)}<br><span style="color:{col};font-size:12px">{esc(x.get("status", "not loaded"))}</span>'))
+        loaded = sum(1 for x in nc if x.get("status") == "loaded as a draft")
         more = f" Showing 10 of {len(nc)}." if len(nc) > 10 else ""
-        inner.append(section("New on CNC, not on GT Street", f"{len(nc)} new wheel range{'s' if len(nc) != 1 else ''} among CNC's newest products.{more} "
-                             "Not added automatically; each needs images, a description and a review first.", rows))
+        inner.append(section("New on CNC", f"{len(nc)} new wheel range{'s' if len(nc) != 1 else ''} in CNC's newest products, {loaded} loaded as drafts.{more}",
+                             rows, "Drafts are tagged status:review and are never published automatically. Add images, check the description and collections, then publish."))
 
     # 1. Things that need a person.
     if m["mismatches"]:
