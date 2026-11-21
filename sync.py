@@ -289,6 +289,65 @@ def cnc_page(url):
             "backorder": "back-order" in stock.lower() or "backorder" in stock.lower(), "offsets": offsets}
 
 
+CNC_FULL = os.environ.get("CNC_FULL", "0") == "1"  # read every product page (offsets, part numbers, new sizes); the default reads CNC's shop listing
+
+def _card_price(block):
+    ins = re.search(r"<ins[^>]*>(.*?)</ins>", block, re.S)
+    part = ins.group(1) if ins else block
+    amts = re.findall(r"woocommerce-Price-amount amount\"><bdi>.*?</span>\s*([\d,]+(?:\.\d+)?)", part, re.S)
+    return _money(amts[0]) if (len(amts) == 1 or (ins and amts)) else None
+
+def cnc_cards(t):
+    """Product cards on one CNC shop listing page: [(url, price, state)] where state is in, out or backorder."""
+    out = []
+    for c in re.split(r'(?=<div class="product-grid-item)', t)[1:]:
+        m = re.search(r'class="product-title"><a href="([^"]+)"', c)
+        cls = re.match(r'<div class="([^"]*)"', c).group(1)
+        pr = re.search(r'<span class="price">(.*?)</span>\s*(?:<p class="instockc">|<p|\n)', c, re.S)
+        if not m: continue
+        state = "out" if "outofstock" in cls else "backorder" if "onbackorder" in cls else "in"
+        out.append((m.group(1), _card_price(pr.group(1)) if pr else None, state))
+    return out
+
+def cnc_listing():
+    """Every product CNC sells, price and stock, from its shop listing (about 280 pages instead of 4,000+ product pages).
+    Returns {url: page dict in the same shape cnc_page gives}, or None if the listing looks incomplete."""
+    st, t = http("https://cncwheels.com.au/shop/")
+    m = re.search(r"of ([\d,]+) results", t or "")
+    if st != 200 or not m: return None
+    total = int(m.group(1).replace(",", "")); n = -(-total // 24)
+    if total < 5000: return None
+    def one(i):
+        time.sleep(CNC_DELAY)
+        st_, tx = http(f"https://cncwheels.com.au/shop/page/{i}/") if i > 1 else (st, t)
+        return cnc_cards(tx) if st_ == 200 and tx else []
+    pages = {}
+    with cf.ThreadPoolExecutor(CNC_WORKERS) as ex:
+        for cards in ex.map(one, range(1, n + 1)):
+            for u, price, state in cards:
+                pages[u] = {"ok": price is not None, "price": price, "why": "" if price is not None else "no price in the shop listing",
+                            "note": "", "v": CNC_PARSER_VERSION, "out": state == "out", "sku": "", "backorder": state == "backorder", "offsets": []}
+    return pages if len(pages) >= 0.97 * total else None
+
+def cnc_fast_pages(urls):
+    """Page results for the urls we need, from the shop listing, cross-checked against 40 real product pages.
+    Returns (pages, note); pages is None when the listing cannot be trusted and every page must be read instead."""
+    lst = cnc_listing()
+    if lst is None: return None, "CNC shop listing looked incomplete"
+    pages = {u: lst[u] for u in urls if u in lst}
+    missing = [u for u in urls if u not in lst]
+    if len(missing) > max(50, 0.03 * len(urls)): return None, f"{len(missing)} of {len(urls)} wanted pages are not in the shop listing"
+    with cf.ThreadPoolExecutor(CNC_WORKERS) as ex:
+        for u, res in zip(missing, ex.map(cnc_page, missing)): pages[u] = res
+        sample = [u for u in urls[::max(1, len(urls) // 40)][:40] if u in lst]
+        bad = []
+        for u, res in zip(sample, ex.map(cnc_page, sample)):
+            a, b = lst[u], res
+            if not (b["ok"] and a["ok"] and a["price"] == b["price"] and a["out"] == b["out"] and a["backorder"] == b["backorder"]):
+                bad.append(u)
+    if len(bad) > 2: return None, f"shop listing disagreed with {len(bad)} of {len(sample)} product pages"
+    return pages, f"{len(urls) - len(missing)} from the shop listing, {len(missing)} read individually, {len(sample) - len(bad)} of {len(sample)} cross-checked"
+
 # ---------------------------------------------------------------- Shopify-platform suppliers
 # Many supplier and distributor websites run on Shopify and publish their catalogue at /products.json.
 # Each one is a single entry in suppliers.json, so adding a supplier is a config change, not new code.
@@ -435,7 +494,18 @@ def main():
     # Every CNC page is read live from cncwheels.com.au on every run. Nothing is reused from earlier runs, and
     # nothing is taken from Google or any other copy of CNC's data.
     pages = {}
+    fast = False
+    if not CNC_FULL and urls:
+        fp, why = cnc_fast_pages(urls)
+        if fp is not None:
+            pages, fast = fp, True
+            report["cnc_read_mode"] = f"shop listing ({why})"
+        else:
+            report["cnc_read_mode"] = f"full page read (listing not used: {why})"; print(report["cnc_read_mode"], flush=True)
+    else:
+        report["cnc_read_mode"] = "full page read"
     with cf.ThreadPoolExecutor(CNC_WORKERS) as ex:
+      if not fast:
         # Spot check first: 40 pages spread across the list. If most fail, CNC is down or hiding prices, so stop in a
         # minute rather than spending three hours finding that out (20 Nov: all 4,177 pages came back without a price).
         probe = urls[::max(1, len(urls) // 40)][:40]
@@ -472,7 +542,7 @@ def main():
     for p, v, url in plan:
         c = combos.setdefault(p["id"], {}).setdefault((v["opts"].get("Rim Size"), v["opts"].get("PCD")), [url, set(), p])
         c[1].add(v["opts"].get("Offset"))
-    if ADD_NEW_SIZES:
+    if ADD_NEW_SIZES and not fast:  # offsets and new sizes need the full page read (CNC_FULL=1)
         for pid, cs in combos.items():
             for (sz, pc), (u, offs, p) in cs.items():
                 pg = pages.get(u, {})

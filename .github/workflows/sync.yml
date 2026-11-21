@@ -27,6 +27,10 @@ on:
         description: "Tick for a dry run of the dealer portals: they are read and compared, nothing is changed in Shopify, even if PORTALS_APPLY is 1."
         type: boolean
         default: false
+      full_cnc:
+        description: "Tick to read every CNC product page (about 3 hours) to find new offsets and sizes. Normal runs read CNC's shop listing, about 5 minutes."
+        type: boolean
+        default: false
       source:
         description: "Set to scheduler only by the external timer (cron-job.org). Leave blank for a manual run."
         type: string
@@ -98,6 +102,7 @@ jobs:
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
           ONLY: ${{ inputs.only || '' }}
+          CNC_FULL: ${{ inputs.full_cnc && '1' || '0' }}
         run: python3 sync.py
       - name: Sales channel coverage
         if: always()
