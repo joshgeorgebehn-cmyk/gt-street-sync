@@ -66,6 +66,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Dealer portal stock (NYC Dealerline, Equipit)
+        # Runs before the CNC step so CNC leaves the stock of portal matched wheels alone (portals_ids.json). Otherwise CNC
+        # set ~3,200 variants to In stock and the portal step set them straight back, every run.
+        if: inputs.only == '' || inputs.only == null || contains(inputs.only, 'portals')
+        continue-on-error: true
+        timeout-minutes: 45
+        env:
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+          NYC_USER: ${{ secrets.NYC_USER }}
+          NYC_PASS: ${{ secrets.NYC_PASS }}
+          EQUIPIT_USER: ${{ secrets.EQUIPIT_USER }}
+          EQUIPIT_PASS: ${{ secrets.EQUIPIT_PASS }}
+          PORTALS_APPLY: ${{ inputs.dry_run && '0' || vars.PORTALS_APPLY || '0' }}
+          TD_PRICES_APPLY: ${{ inputs.dry_run && '0' || vars.TD_PRICES_APPLY || '0' }}
+          EQUIPIT_VENDORS: ${{ vars.EQUIPIT_VENDORS || 'Tough Dog' }}
+        run: |
+          python3 -m pip install -q playwright && python3 -m playwright install --with-deps chromium > /dev/null
+          python3 -W ignore portals.py
       - name: Read every supplier website live and apply prices and stock
         env:
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
@@ -104,25 +125,6 @@ jobs:
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
           ONLY: ${{ inputs.only || '' }}
         run: python3 maintenance.py
-      - name: Dealer portal stock (NYC Dealerline, Equipit)
-        if: always() && (inputs.only == '' || inputs.only == null || contains(inputs.only, 'portals'))
-        continue-on-error: true
-        timeout-minutes: 45
-        env:
-          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
-          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
-          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
-          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-          NYC_USER: ${{ secrets.NYC_USER }}
-          NYC_PASS: ${{ secrets.NYC_PASS }}
-          EQUIPIT_USER: ${{ secrets.EQUIPIT_USER }}
-          EQUIPIT_PASS: ${{ secrets.EQUIPIT_PASS }}
-          PORTALS_APPLY: ${{ inputs.dry_run && '0' || vars.PORTALS_APPLY || '0' }}
-          TD_PRICES_APPLY: ${{ inputs.dry_run && '0' || vars.TD_PRICES_APPLY || '0' }}
-          EQUIPIT_VENDORS: ${{ vars.EQUIPIT_VENDORS || 'Tough Dog' }}
-        run: |
-          python3 -m pip install -q playwright && python3 -m playwright install --with-deps chromium > /dev/null
-          python3 -W ignore portals.py
       - name: Independent re-check against supplier websites
         if: (success() || failure())
         env:

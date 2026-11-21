@@ -43,6 +43,10 @@ MIN_PRICE = float(os.environ.get("MIN_PRICE", "10"))
 CNC_SET_SKU = os.environ.get("CNC_SET_SKU", "1") == "1"
 # Stock model: every synced variant is tracked in Shopify. Out of stock at the supplier = 0 available (Sold out).
 # In stock at the supplier = STOCK_QTY available. Suppliers publish availability, not counts, so STOCK_QTY is a
+try:  # variants whose stock the dealer portal step has just set (written by portals.py earlier in the same job)
+    PORTAL_IDS = set(json.load(open("portals_ids.json")))
+except Exception:
+    PORTAL_IDS = set()
 # stand-in meaning "available from the supplier". Products tagged OWN_STOCK_TAG hold GT Street's own counted stock
 # and are never given supplier quantities.
 STOCK_QTY = int(os.environ.get("STOCK_QTY", "20"))
@@ -432,8 +436,19 @@ def main():
     # nothing is taken from Google or any other copy of CNC's data.
     pages = {}
     with cf.ThreadPoolExecutor(CNC_WORKERS) as ex:
-        for u, res in zip(urls, ex.map(cnc_page, urls)):
+        # Spot check first: 40 pages spread across the list. If most fail, CNC is down or hiding prices, so stop in a
+        # minute rather than spending three hours finding that out (20 Nov: all 4,177 pages came back without a price).
+        probe = urls[::max(1, len(urls) // 40)][:40]
+        for u, res in zip(probe, ex.map(cnc_page, probe)):
             pages[u] = res
+        if probe and sum(1 for u in probe if not pages[u]["ok"]) / len(probe) > 0.5:
+            print("CNC spot check failed on most of 40 pages; skipping the full CNC read", flush=True)
+            for u in urls:
+                pages.setdefault(u, {"ok": False, "why": "not read: CNC spot check failed"})
+        else:
+            rest = [u for u in urls if u not in pages]
+            for u, res in zip(rest, ex.map(cnc_page, rest)):
+                pages[u] = res
     failed = [u for u, r in pages.items() if not r["ok"]]
     report["cnc_pages_read"] = len(urls); report["cnc_pages_failed"] = len(failed)
     report["cnc_skipped_pages"] = [{"url": u, "why": pages[u].get("why") or f"HTTP {pages[u].get('status')}"} for u in failed][:300]
@@ -595,7 +610,7 @@ def main():
             if v["price"] > 0 and new_price < v["price"] * (1 - BIG_DROP):
                 report.setdefault("big_drops", []).append(rec)
         own = OWN_STOCK_TAG in [t.lower() for t in p.get("tags", [])]
-        if src is not None and not own and v["item"]:
+        if src is not None and not own and v["item"] and v["id"] not in PORTAL_IDS:  # portal matched variants: stock set by portals.py
             state, sq = src
             want_policy = "CONTINUE" if state == "backorder" else "DENY"
             if v["tracked"] is not True or v["policy"] != want_policy:

@@ -383,11 +383,17 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
     # The checks themselves, with links to each exact run.
     rows = []
     for c in checks:
+        if not c.get("expected"):
+            continue
         url = safe_url(c.get("url", ""))
-        name = esc(c.get("label", "check")) + ("" if c.get("expected") else f' <span style="color:{GREY};font-weight:400">(manual)</span>')
+        name = esc(c.get("label", "check"))
         left = f'<a href="{esc(url)}" style="color:{INK};text-decoration:none">{name}</a>' if url else name
         rows.append(pair_row(left, check_result(c)))
-    inner.append(section("Checks in this digest", "Each supplier website read live at every check, then amended products rechecked (a sample when a run changes a lot).", rows))
+    manual = [c for c in checks if not c.get("expected")]
+    if manual:
+        ok_m = sum(1 for c in manual if c["report"] is not None)
+        rows.append(pair_row("Manual runs", f'{len(manual)} run{"s" if len(manual) != 1 else ""} in this period ({ok_m} with a report), included in the totals above'))
+    inner.append(section("Checks", "The four scheduled checks since yesterday 10am.", rows))
 
     # Dealer portals (NYC Dealerline, Equipit): the latest check that read them.
     pc = next((c for c in reversed(checks) if c.get("portals")), None)
@@ -404,40 +410,33 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
                 prow.append(pair_row(esc(pname), esc(txt)))
             else:
                 prow.append(pair_row(esc(pname), f'<span style="color:{RED}">Could not be read: {esc(r.get("error") or "unknown")}</span>'))
-            for ex in (r.get("examples") or [])[:12]:
-                prow.append(text_row(f'{ex.get("product")} {ex.get("variant")}: site shows {ex.get("now")}, portal shows {ex.get("portal")}'))
             if "price_matched" in r:
                 g = r.get("price_guide") or {}
                 prow.append(pair_row("Tough Dog prices", esc(
                     f'{r.get("price_matched", 0):,} matched to the price guide ({g.get("store", "competitor")}), '
                     f'{r.get("price_would_change", 0):,} changes proposed, {len(r.get("price_held") or []):,} held for review'
                     + (f'. {r["price_error"]}' if r.get("price_error") else ""))))
-                for ex in (r.get("price_examples") or [])[:12]:
-                    prow.append(text_row(f'{ex.get("product")}: {money(ex.get("from"))} to {money(ex.get("to"))}'))
-                for ex in (r.get("price_held") or [])[:8]:
-                    prow.append(text_row(f'Held: {ex.get("product")}: site {money(ex.get("now"))}, guide {money(ex.get("guide"))} ({ex.get("why")})', AMBER))
-        note = ("Stock from the dealer portals was applied." if applied else
-                "Review mode: the portals were read and compared, nothing was changed. These are the differences that would be applied.")
+        note = ("Dealer portal stock is applied." if applied else "Review mode: nothing was changed.")
         inner.append(section("Dealer portals", note, prow))
 
     # 1. Things that need a person.
     if m["mismatches"]:
-        inner.append(section("Recheck mismatches", "The site does not match the supplier for these. Check them first.", [text_row(x) for x in m["mismatches"][:60]]))
+        inner.append(section("Recheck mismatches", f"The site does not match the supplier for these. Check them first.{' Showing 10 of ' + str(len(m['mismatches'])) + '.' if len(m['mismatches']) > 10 else ''}", [text_row(x) for x in m["mismatches"][:10]]))
     if bad_checks:
         inner.append(section("Check problems", "These checks are missing or incomplete, so their results are not counted above.",
                              [text_row(f'{c.get("label")}: {"; ".join(c["problems"])}', RED) for c in bad_checks]))
     if m["errors"]:
-        inner.append(section("Errors", f"{len(m['errors'])} error{'s' if len(m['errors']) != 1 else ''} during the checks.", [text_row(e) for e in m["errors"][:25]]))
+        inner.append(section("Errors", f"{len(m['errors'])} error{'s' if len(m['errors']) != 1 else ''} during the checks.", [text_row(e) for e in m["errors"][:6]]))
     if m["held"]:
         g = group(m["held"], lambda h: (round(num(h.get("current")) or 0, 2), round(num(h.get("cnc")) or 0, 2)))
         rows = [item_row(h, f'<span style="color:{GREY}">site</span> {money(h.get("current"))}<br><span style="color:{GREY}">supplier</span> <b>{money(h.get("cnc"))}</b>'
-                            + (f'<br><span style="color:{GREY};font-size:12px">{esc(h["why"])}</span>' if h.get("why") else "")) for h in g[:50]]
-        inner.append(section("Held for your review", f"{len(m['held'])} price{'s' if len(m['held']) != 1 else ''} not changed.", rows))
+                            + (f'<br><span style="color:{GREY};font-size:12px">{esc(h["why"])}</span>' if h.get("why") else "")) for h in g[:10]]
+        inner.append(section("Held for your review", f"{len(m['held'])} price{'s' if len(m['held']) != 1 else ''} not changed, largest first. Showing up to 10.", rows))
 
     if m["big"]:
         g = group(m["big"], lambda c: (round(num(c["from"]), 2), round(num(c["to"]), 2)))
         rows = [item_row(c, f'<span style="color:{GREY};text-decoration:line-through;font-size:13px">{money(c["from"])}</span> <b>{money(c["to"])}</b><br>'
-                            + pill("&#9660; " + str(round((1 - num(c["to"]) / num(c["from"])) * 100)) + "%", RED)) for c in g[:40]]
+                            + pill("&#9660; " + str(round((1 - num(c["to"]) / num(c["from"])) * 100)) + "%", RED)) for c in g[:10]]
         inner.append(section("Big price drops applied", f"{len(m['big'])} price{'s' if len(m['big']) != 1 else ''} fell more than 20%. Applied as the supplier shows; worth a glance.", rows))
 
     # 2. What changed.
@@ -452,8 +451,8 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
             continue
         g = group(items, lambda c: (round(num(c["from"]), 2), round(num(c["to"]), 2)))
         g.sort(key=lambda c: abs(num(c["to"]) - num(c["from"])), reverse=True)
-        more = " Showing the largest 60 groups; every change is in the attached CSV." if len(g) > 60 else ""
-        inner.append(section(title, f"{len(items)} applied, largest first.{more}", [item_row(c, price_cell(c)) for c in g[:60]]))
+        more = " Showing the largest 10; every change is in the attached CSV." if len(g) > 10 else ""
+        inner.append(section(title, f"{len(items)} applied, largest first.{more}", [item_row(c, price_cell(c)) for c in g[:10]]))
 
     if m["stock"]:
         order = {"out": 0, "backorder": 1, "low": 2, "in": 3}
@@ -466,8 +465,8 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
             was = f'<br><span style="color:{GREY};font-size:12px">was {esc(label.get(s.get("prev"), s.get("prev")))}</span>' if s.get("prev") else ""
             return pill(esc(label.get(k, s.get("now", k))), col.get(k, GREY)) + was
         n_bo = sum(1 for s in m["stock"] if s.get("state") == "backorder"); n_low = sum(1 for s in m["stock"] if s.get("state") == "low")
-        inner.append(section("Stock changes", f"{sold} sold out, {restocked} back in stock, {n_low} low stock, {n_bo} on back order (still orderable). Copied from each supplier's own page.",
-                             [item_row(s, st(s)) for s in g[:80]]))
+        inner.append(section("Stock changes", f"{sold} sold out, {restocked} back in stock, {n_low} low stock, {n_bo} on back order (still orderable). Copied from each supplier's own page. Showing the first 12 groups.",
+                             [item_row(s, st(s)) for s in g[:12]]))
 
     if m["new"]:
         g = group(m["new"], lambda c: ())
@@ -476,32 +475,27 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
             return f"from <b>{money(min(ps))}</b>" if ps else ""
         more = f" {m['deferred']} more are queued for the next check." if m["deferred"] else ""
         inner.append(section("New sizes added", f"{len(m['new'])} size{'s' if len(m['new']) != 1 else ''} CNC sells that the site did not list, added at CNC's price less $1 with their stock.{more}",
-                             [item_row(c, low_price(c)) for c in g[:60]]))
+                             [item_row(c, low_price(c)) for c in g[:10]]))
     if m["disc"]:
         g = group(m["disc"], lambda c: ())
         inner.append(section("Discontinued at CNC", f"{len(m['disc'])} size{'s' if len(m['disc']) != 1 else ''} no longer sold by CNC (confirmed against CNC's own shop data).",
-                             [item_row(c, pill("Discontinued", RED)) for c in g[:60]],
+                             [item_row(c, pill("Discontinued", RED)) for c in g[:10]],
                              "Marked Discontinued on the site and set to out of stock. Nothing was deleted; remove them manually if you no longer want them listed."))
 
     # 3. Suppliers, per check (derived from the reports, nothing hard coded).
     srows = []
-    for lab, r in m["suppliers"]:
-        cnc = f'{r.get("cnc_pages_read", 0):,} CNC pages' + (f', {r.get("cnc_pages_failed")} unreadable' if r.get("cnc_pages_failed") else "")
-        parts = [cnc]
-        for name, s in (r.get("suppliers") or {}).items():
-            if not isinstance(s, dict):
+    if m["suppliers"]:
+        lab, r = m["suppliers"][-1]
+        cnc = f'CNC {r.get("cnc_pages_read", 0):,} pages' + (f', <span style="color:{RED}">{r.get("cnc_pages_failed")} unreadable</span>' if r.get("cnc_pages_failed") else "")
+        srows.append(pair_row("CNC Wheels", cnc))
+        for name, sv in (r.get("suppliers") or {}).items():
+            if not isinstance(sv, dict):
                 continue
-            if s.get("error"):
-                parts.append(f'<span style="color:{RED};font-weight:700">{esc(name)} could not be read</span>')
+            if sv.get("error"):
+                srows.append(pair_row(f'<span style="color:{RED}">{esc(name)} could not be read</span>', ""))
             else:
-                um = len(s.get("unmatched") or [])
-                parts.append(f'{esc(name)} {s.get("variants_matched", 0):,}' + (f' ({um} not on their site)' if um else ""))
-        srows.append(pair_row(esc(lab), ", ".join(parts)))
-    inner.append(section("Suppliers checked", "Variants matched and read directly from each supplier's own website.", srows))
-    if m["skipped"]:
-        rows = [f'<tr><td style="padding:7px 0;border-bottom:1px solid {LINE};font-size:12px">{esc(str(x.get("url", "")).rstrip("/").split("/")[-1].replace("-", " "))}'
-                f'<div style="color:{GREY}">{esc(x.get("why", ""))}</div></td></tr>' for x in m["skipped"][:25] if isinstance(x, dict)]
-        inner.append(section("CNC pages skipped", f"{len(m['skipped'])} left unchanged; they are read again at the next check.", rows))
+                srows.append(pair_row(esc(name), f'{sv.get("variants_matched", 0):,} variants read'))
+        inner.append(section("Suppliers", f"From the latest check ({esc(lab)}), each read live from the supplier's own website.", srows))
 
     body = shell("".join(inner), ok, headline, date_txt, runs_url)
     summary = {"subject": subject, "checks": [{"label": c.get("label"), "run_id": c.get("run_id"), "url": c.get("url"),
