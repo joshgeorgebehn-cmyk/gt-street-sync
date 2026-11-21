@@ -104,6 +104,7 @@ jobs:
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
           ONLY: ${{ inputs.only || '' }}
+          CREATE_NEW_PRODUCTS: ${{ vars.CREATE_NEW_PRODUCTS || '0' }}
           CNC_FULL: ${{ (inputs.full_cnc || needs.gate.outputs.full == 'true') && '1' || '0' }}
         run: python3 sync.py
       - name: Sales channel coverage
@@ -131,6 +132,7 @@ jobs:
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
           ONLY: ${{ inputs.only || '' }}
+          CNC_DESCRIPTIONS_APPLY: ${{ vars.CNC_DESCRIPTIONS_APPLY || '0' }}
         run: python3 maintenance.py
       - name: Independent re-check against supplier websites
         if: (success() || failure())

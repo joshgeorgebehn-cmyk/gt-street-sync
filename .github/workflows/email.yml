@@ -18,9 +18,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "live = send the real digest. preview = build it and attach email.html to the run, send nothing."
+        description: "live = send the real digest to everyone. preview = build it and attach email.html to the run, send nothing. send_to_me = send it to joshua.b@gtstreet.au only (today's real digest still goes out later)."
         type: choice
-        options: [live, preview]
+        options: [live, preview, send_to_me]
         default: live
       resend:
         description: "Send even if today's digest has already gone out"
@@ -68,7 +68,7 @@ jobs:
           python3 digest.py sent "$DAY" | tee -a "$GITHUB_OUTPUT"
       - name: "2. Collect the expected checks (waits up to 60 minutes for one still running)"
         id: collect
-        if: steps.gate.outputs.sent != 'true' || inputs.resend || inputs.mode == 'preview'
+        if: steps.gate.outputs.sent != 'true' || inputs.resend || inputs.mode == 'preview' || inputs.mode == 'send_to_me'
         run: python3 digest.py collect
       - name: "3. Build and send the digest"
         id: send

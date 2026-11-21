@@ -175,7 +175,7 @@ def load_checks(manifest: dict) -> list[dict]:
 # ---------------------------------------------------------------- consolidation
 def consolidate(checks: list[dict]) -> dict:
     """Combine every readable check, oldest first. A variant changed twice shows once: first 'from', last 'to'."""
-    good = [c for c in checks if c["report"]]
+    good = [c for c in checks if c["report"] and not c["report"].get("dry_run")]  # a dry run changed nothing, so it is never counted
     pc: dict[str, dict] = {}; sc: dict[str, dict] = {}; held: dict[str, dict] = {}; nv: dict[str, dict] = {}; dc: dict[str, dict] = {}
     errors, mism, suppliers, skipped = [], [], [], []
     for c in good:
@@ -391,8 +391,10 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
         rows.append(pair_row(left, check_result(c)))
     manual = [c for c in checks if not c.get("expected")]
     if manual:
-        ok_m = sum(1 for c in manual if c["report"] is not None)
-        rows.append(pair_row("Manual runs", f'{len(manual)} run{"s" if len(manual) != 1 else ""} in this period ({ok_m} with a report), included in the totals above'))
+        dry = sum(1 for c in manual if c["report"] and c["report"].get("dry_run"))
+        live = len(manual) - dry
+        txt = f'{live} manual run{"s" if live != 1 else ""} counted in the totals above' + (f'; {dry} dry run{"s" if dry != 1 else ""} (nothing changed, not counted)' if dry else "")
+        rows.append(pair_row("Manual runs", txt))
     inner.append(section("Checks", "The four scheduled checks since yesterday 10am. Thursday 3am is the weekly full sweep (every CNC product page).", rows))
 
     # Dealer portals (NYC Dealerline, Equipit): the latest check that read them.
@@ -676,7 +678,10 @@ def main() -> int:
     print(f"Email built: {subject} ({len(body):,} bytes, CSV {len(csv_bytes):,} bytes)", flush=True)
     if mode == "preview":
         log["state"] = "preview, not sent"; json.dump(log, open("delivery.json", "w"), indent=1); return 0
-    to = [a.strip() for a in (os.environ.get("EMAIL_TO") or DEFAULT_TO).split(",") if re.fullmatch(r"[^@\s,]+@[^@\s,]+\.[^@\s,]+", a.strip())]
+    recipients = "joshua.b@gtstreet.au" if mode == "send_to_me" else (os.environ.get("EMAIL_TO") or DEFAULT_TO)
+    if mode == "send_to_me":
+        subject = "TEST, sent to you only: " + subject
+    to = [a.strip() for a in recipients.split(",") if re.fullmatch(r"[^@\s,]+@[^@\s,]+\.[^@\s,]+", a.strip())]
     to = list(dict.fromkeys(to))
     if not to:
         log["state"] = "failed: no valid recipients"; json.dump(log, open("delivery.json", "w"), indent=1); print(log["state"]); return 2

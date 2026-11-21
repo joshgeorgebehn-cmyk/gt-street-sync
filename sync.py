@@ -489,8 +489,10 @@ def main():
     if run_cnc and products and len(idx) >= 3000:
         try:
             report["new_on_cnc"], report["cnc_ranges_not_listed"] = new_cnc_ranges(products, idx)
-            if CREATE_NEW_PRODUCTS and source == "admin":
+            if (CREATE_NEW_PRODUCTS or DRY_RUN) and source == "admin":
                 load_new_ranges(report, report["new_on_cnc"], idx, {p["title"].lower() for p in products})
+            else:
+                for e in report["new_on_cnc"]: e["status"] = "found; loading new ranges is switched off"
         except Exception as e:
             report["errors"].append(f"New product check on CNC failed: {e}")
 
@@ -853,7 +855,7 @@ def create_variants(report, specs):
             report["errors"].append({"sort_options": p["title"], "error": str(e)[:200]})
 
 NEW_RANGE_LIMIT = int(os.environ.get("NEW_RANGE_LIMIT", "5"))  # new ranges loaded per run; the rest wait for the next run
-CREATE_NEW_PRODUCTS = os.environ.get("CREATE_NEW_PRODUCTS", "1") == "1"
+CREATE_NEW_PRODUCTS = os.environ.get("CREATE_NEW_PRODUCTS", "0") == "1"  # off until the repository variable CREATE_NEW_PRODUCTS is 1; a dry run always reports
 BRAND_NAMES = {"gt form": "GT Form", "jsr": "JSR", "black rock": "Black Rock"}
 PRODUCT_SET_M = """mutation($i:ProductSetInput!){ productSet(input:$i, synchronous:true){ product{ id handle title variants(first:1){ nodes{ id } } }
   userErrors{ field message code } } }"""
@@ -873,16 +875,33 @@ def cnc_title(html_text):
         else: out.append(t.capitalize())
     return " ".join(out)
 
+def cnc_intro(page_html):
+    """CNC has no product description field; its only copy is the SEO snippet (about 160 characters, sometimes cut off mid word,
+    sometimes about one size or a social handle). Returns its first sentence when that sentence is clean and about the wheel in
+    general, otherwise ''."""
+    m = re.search(r'<meta name="description" content="([^"]*)"', page_html or "")
+    if not m: return ""
+    meta = html.unescape(m.group(1)).strip()
+    parts = re.split(r"(?<=[a-z\)])\.\s+", meta)
+    # With more than one sentence the first is complete. A single sentence only counts if it ends in a full stop (a snippet cut at 160 characters does not).
+    first = parts[0] + "." if len(parts) > 1 else (meta if meta.endswith(".") else "")
+    if len(first) < 50 or len(first) > 230 or not first[0].isupper(): return ""
+    if re.search(r'\b\d{2}\s*x\s*\d|\b[5-8]x\d{3}|\binch\b|["@#]|\bnow available\b|\bsizes?\b|https?:|\bsale\b|\bfrom \$', first, re.I): return ""
+    first = re.sub(r"\bGT form\b", "GT Form", first)
+    return first
+
 def build_new_product(rng, idx):
     """Read every CNC page of a new range and describe the product to create. Returns (spec, reason); spec is None when skipped."""
     pages = sorted((k, u) for k, u in idx.items() if k[0] == rng)
     brand = next((b for b in BRAND_NAMES if rng == b or rng.startswith(b + " ")), None)
     if not brand: return None, "brand not recognised"
-    title, image, variants = "", "", []
+    title, image, variants, finish, intro = "", "", [], "", ""
+    category = "Off-Road Wheels" if any("/4x4-rims/" in u for _, u in pages) else "Street Wheels"
     for (r, sz, pcd), u in pages:
         st, t = http(u); time.sleep(CNC_DELAY)
         if st != 200 or not t: continue
         if not title: title = cnc_title(t)
+        if not intro: intro = cnc_intro(t)
         if not image:
             m = re.search(r'<meta property="og:image" content="([^"]+)"', t)
             image = m.group(1) if m else ""
@@ -893,6 +912,7 @@ def build_new_product(rng, idx):
         if tab:
             for a, b in re.findall(r"<th[^>]*>(.*?)</th>\s*<td[^>]*>(.*?)</td>", tab.group(1), re.S):
                 attrs[re.sub("<[^>]+>", "", a).strip().lower()] = html.unescape(re.sub("<[^>]+>", "", b)).strip()
+        if not finish and attrs.get("finish"): finish = attrs["finish"].title()
         offs = [o.strip().replace(" ", "") for o in attrs.get("offset", "").split(",") if o.strip()]
         offs = [("+" + o) if re.match(r"^\d", o) else o for o in offs]
         stock = (re.findall(r'class="stock[^"]*">([^<]*)', t) or [""])[0].strip().lower()
@@ -906,21 +926,28 @@ def build_new_product(rng, idx):
     if not title: return None, "could not read the product title"
     if norm(title) != rng: return None, f"title '{title}' would not match CNC range '{rng}', skipped to avoid a duplicate"
     if not variants: return None, "no sizes with a price and offsets could be read"
-    return {"title": title, "vendor": BRAND_NAMES[brand], "image": image, "variants": variants}, ""
+    words = title.split(); fin = finish.split()
+    stem = words[:-len(fin)] if fin and [w.lower() for w in words[-len(fin):]] == [w.lower() for w in fin] else words
+    model = " ".join(stem)  # brand and model, e.g. "Black Rock Cage"; the finish is listed separately
+    return {"title": title, "vendor": BRAND_NAMES[brand], "image": image, "variants": variants, "category": category, "finish": finish, "model": model, "intro": intro}, ""
 
 def product_input(spec, loc):
     sizes = sorted({v["opts"][0] for v in spec["variants"]}, key=lambda x: _num(x))
     pcds = sorted({v["opts"][1] for v in spec["variants"]}, key=lambda x: _num(x))
     offs = sorted({v["opts"][2] for v in spec["variants"]}, key=lambda x: _num(x))
     t, vendor = spec["title"], spec["vendor"]
-    body = (f"<p>The {html.escape(t)} is sold and priced per wheel, so select the quantity your vehicle needs.</p> "
-            f"<p><strong>Available rim sizes:</strong> {', '.join(sizes)}.<br> <strong>Available PCDs:</strong> {', '.join(pcds)}.<br> "
-            f"<strong>Available offsets:</strong> {', '.join(offs)}.</p> "
-            f"<p>Each variant has been built from the available {html.escape(vendor)} fitment data. Not every size, PCD and offset combination is available for every wheel. "
-            f"Please select the exact variant required before ordering.</p> "
+    def li(label, val): return f"<li><strong>{label}:</strong> {html.escape(val)}</li>"
+    items = [li("Category", spec.get("category", "Wheels"))]
+    if spec.get("model"): items.append(li("Model", spec["model"]))
+    if spec.get("finish"): items.append(li("Finish", spec["finish"]))
+    items += [li("Available rim sizes", ", ".join(sizes)), li("Available PCDs", ", ".join(pcds)), li("Available offsets", ", ".join(offs))]
+    lead = f'<p class="cnc-intro">{html.escape(spec["intro"])}</p>' if spec.get("intro") else ""
+    body = (lead + f"<p>The {html.escape(t)} is sold and priced per wheel, so select the quantity your vehicle needs.</p><ul>{''.join(items)}</ul>"
+            f"<p>Not every size, PCD and offset combination is available for this wheel. Please select the exact variant required before ordering.</p>"
             f"<p>Please confirm fitment before ordering, including rim size, PCD, offset, brake clearance, guard clearance and load rating.</p>")
     inp = {"title": t, "vendor": vendor, "productType": "Wheels", "status": "DRAFT", "descriptionHtml": body,
-           "tags": [vendor, "NYC Wheels", "Drop Ship", "Rims", "Wheels", "status:review", "import:" + datetime.date.today().isoformat()],
+           "tags": [t_ for t_ in dict.fromkeys([vendor, "NYC Wheels", "Drop Ship", "Rims", "Wheels", spec.get("category", ""), (spec.get("model") or "").replace(vendor, "", 1).strip(),
+                       spec.get("finish", ""), "status:review", "import:" + datetime.date.today().isoformat()]) if t_],
            "seo": {"description": f"{t}. Fitment checked on every order, delivered Australia wide."},
            "productOptions": [{"name": "Rim Size", "values": [{"name": x} for x in sizes]}, {"name": "PCD", "values": [{"name": x} for x in pcds]},
                               {"name": "Offset", "values": [{"name": x} for x in offs]}],

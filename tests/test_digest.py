@@ -389,3 +389,29 @@ class FullSweep(unittest.TestCase):
         self.assertFalse(digest.is_full_sweep("17 16 * * *", t("2026-11-24T16:20:00")))  # Wed 25 Nov 3:17am
         self.assertFalse(digest.is_full_sweep("17 22 * * *", t("2026-11-25T22:20:00")))  # Thu 9:17am
         self.assertTrue(digest.is_full_sweep("17 16 * * *", t("2026-11-25T23:00:00")))   # late start still counts
+
+
+class DryRunAndTestMode(unittest.TestCase):
+    def test_dry_run_reports_are_not_counted(self):
+        import notify
+        live = {"report": {"price_changes": [{"variant": "a", "id": "1", "from": 10, "to": 9}], "errors": []}, "verify": {}, "label": "x", "problems": []}
+        dry = {"report": {"dry_run": True, "price_changes": [{"variant": "b", "id": "2", "from": 10, "to": 8}], "errors": []}, "verify": {}, "label": "y", "problems": []}
+        m = notify.consolidate([live, dry])
+        self.assertEqual(len(m["prices"]), 1); self.assertEqual(len(m["good"]), 1)
+
+    def test_send_to_me_goes_only_to_josh(self):
+        import notify, tempfile
+        sent = {}
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"DIGEST_MODE": "send_to_me", "EMAIL_TO": "a@x.com,b@x.com", "DIGEST_MANIFEST": "tests/fixtures/manifest.json"}), \
+             mock.patch.object(notify, "deliver", side_effect=lambda subj, body, to, csv, log, **k: sent.update(to=to, subj=subj) or "graph"):
+            cwd = os.getcwd(); base = cwd
+            try:
+                os.chdir(d)
+                m = json.load(open(os.path.join(base, "tests/fixtures/manifest.json")))
+                for c in m.get("checks", []):
+                    if c.get("dir"): c["dir"] = os.path.join(base, "tests/fixtures", c["dir"])
+                json.dump(m, open("m.json", "w")); os.environ["DIGEST_MANIFEST"] = "m.json"
+                notify.main()
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(sent["to"], ["joshua.b@gtstreet.au"]); self.assertTrue(sent["subj"].startswith("TEST, sent to you only"))

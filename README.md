@@ -111,3 +111,22 @@ Review mode is the default: the portals are read and compared and the digest lis
 changes. Set the repository variable PORTALS_APPLY to 1 to apply. A portal that cannot be read, or that matches
 fewer than 20% of our variants, never changes anything. Test on its own with the sync workflow's "only" box set to
 `portals`.
+
+## Switches and dry runs (new features start switched off)
+
+Repository variables (Settings > Secrets and variables > Actions > Variables). Unset means 0.
+
+| Variable | Set to 1 to | Dry run behaviour |
+|---|---|---|
+| `CREATE_NEW_PRODUCTS` | load new CNC wheel ranges as DRAFT products (5 per run) | reports what would be loaded |
+| `CNC_DESCRIPTIONS_APPLY` | write CNC's opening sentence into wheel descriptions | reports counts and examples |
+| `PORTALS_APPLY`, `TD_PRICES_APPLY` | apply dealer portal stock and Tough Dog prices | portals read and compared only |
+
+To try everything first: Actions > Supplier price and stock sync > Run workflow with `dry_run` ticked. Nothing changes in Shopify.
+Read `report.md` (new products) and `maintenance.md` (CNC opening sentence examples) in the run's `sync-report` artifact.
+
+To try the email: Actions > Daily digest email > Run workflow with mode `send_to_me`. It goes to joshua.b@gtstreet.au only, is labelled TEST,
+and does not stop the real digest going out later. Dry run reports are never counted in the digest totals.
+
+CNC has no product description field. The only copy on its pages is a short SEO snippet; the script keeps its first sentence when that
+sentence is complete and not about one size (class `cnc-intro`, first paragraph) and leaves out snippets that are cut off or mention sizes or social handles.
