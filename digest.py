@@ -37,6 +37,14 @@ def gate(cron: str, hours: list[int], started: dt.datetime | None = None) -> boo
     return scheduled_moment(cron, started).astimezone(SYD).hour in hours
 
 
+FULL_SWEEP_WEEKDAY, FULL_SWEEP_HOUR = 3, 3  # Thursday (Monday is 0), the 3:17am check: every CNC product page is read
+
+
+def is_full_sweep(cron: str, started: dt.datetime) -> bool:
+    local = scheduled_moment(cron, started).astimezone(SYD)
+    return local.weekday() == FULL_SWEEP_WEEKDAY and local.hour == FULL_SWEEP_HOUR
+
+
 EXTERNAL_TITLE = "Scheduled check"
 
 
@@ -145,7 +153,8 @@ def classify(runs: list[dict], now: dt.datetime, report_check=has_report) -> lis
     checks = []
     for slot in slots:
         loc = slot.astimezone(SYD)
-        nice = f"{loc.strftime('%-I%p').lower()} check {loc.strftime('%a %d %b')}"
+        full = loc.weekday() == FULL_SWEEP_WEEKDAY and loc.hour == FULL_SWEEP_HOUR
+        nice = f"{loc.strftime('%-I%p').lower()} {'full sweep' if full else 'check'} {loc.strftime('%a %d %b')}"
         # Gated duplicates finish in seconds with no report; the real run is the one that produced (or is producing) one.
         real = [r for r in found[slot] if r["status"] != "completed" or r.get("conclusion") != "success" or report_check(r["id"])]
         if not real:
@@ -190,9 +199,10 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "gate":
         if os.environ.get("GITHUB_EVENT_NAME", "schedule") != "schedule":
-            print("go=true")
+            print("go=true"); print("full=false")
         else:
             ok = gate(sys.argv[2], [int(h) for h in sys.argv[3:]])
+            print("full=" + ("true" if ok and is_full_sweep(sys.argv[2], dt.datetime.now(UTC)) else "false"))
             if ok and external_run_recent():
                 print("The external timer already started this check; the GitHub backup stands down.", file=sys.stderr)
                 ok = False

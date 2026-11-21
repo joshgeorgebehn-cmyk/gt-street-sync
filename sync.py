@@ -329,6 +329,34 @@ def cnc_listing():
                             "note": "", "v": CNC_PARSER_VERSION, "out": state == "out", "sku": "", "backorder": state == "backorder", "offsets": []}
     return pages if len(pages) >= 0.97 * total else None
 
+def cnc_newest(pages=10):
+    """The newest products on CNC's shop (the listing is sorted by latest): [(url, price, state)], newest first."""
+    out = []
+    for i in range(1, pages + 1):
+        st, t = http("https://cncwheels.com.au/shop/" if i == 1 else f"https://cncwheels.com.au/shop/page/{i}/")
+        if st != 200 or not t: break
+        out += cnc_cards(t); time.sleep(CNC_DELAY)
+    return out
+
+def new_cnc_ranges(products, idx):
+    """Wheel ranges among CNC's 240 newest products (our three brands) that GT Street does not list at all.
+    Reported, never created automatically: a new range needs images, a description and a review first."""
+    ours = {x for p in products for x in ALIAS.get(norm(p["title"]), [norm(p["title"])])}
+    rng_of = {u: k[0] for k, u in idx.items()}
+    newest = cnc_newest()
+    by_range = {}
+    for k, u in idx.items(): by_range.setdefault(k[0], []).append(u)
+    price_of = {u: pr for u, pr, _ in newest}
+    out, seen = [], set()
+    for u, pr, state in newest:
+        r = rng_of.get(u)
+        if not r or r in ours or r in seen: continue
+        seen.add(r)
+        ps = [price_of[x] for x in by_range[r] if price_of.get(x)]
+        out.append({"name": r.title(), "sizes": len(by_range[r]), "from": min(ps) if ps else None, "url": u})
+    not_listed = sum(1 for r in by_range if r not in ours)
+    return out, not_listed
+
 def cnc_fast_pages(urls):
     """Page results for the urls we need, from the shop listing, cross-checked against 40 real product pages.
     Returns (pages, note); pages is None when the listing cannot be trusted and every page must be read instead."""
@@ -457,6 +485,12 @@ def main():
     report = {"started": started.isoformat(), "dry_run": DRY_RUN, "products": len(products), "cnc_pages_known": len(idx),
               "unmatched_products": [], "unmatched_variants": [], "missing_offsets": [], "held": [],
               "price_changes": [], "sold_out": [], "back_in_stock": [], "errors": []}
+
+    if run_cnc and products and len(idx) >= 3000:
+        try:
+            report["new_on_cnc"], report["cnc_ranges_not_listed"] = new_cnc_ranges(products, idx)
+        except Exception as e:
+            report["errors"].append(f"New product check on CNC failed: {e}")
 
     plan = []  # (product, variant, url)
     for p in products:

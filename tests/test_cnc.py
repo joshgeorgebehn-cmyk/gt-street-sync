@@ -24,3 +24,14 @@ class Cards(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NewOnCnc(unittest.TestCase):
+    def test_new_ranges_found_among_newest(self):
+        idx = {("jsr st57 shadow", "18x8", "5x120"): "https://c/jsr-st57-shadow-18x8-5x120-wheel/", ("jsr st21", "17x7", "4x100"): "https://c/jsr-st21-17x7-4x100-wheel/"}
+        newest = [("https://c/jsr-st57-shadow-18x8-5x120-wheel/", 360.0, "in"), ("https://c/jsr-st21-17x7-4x100-wheel/", 300.0, "in")]
+        from unittest import mock
+        with mock.patch.object(sync, "cnc_newest", return_value=newest):
+            out, not_listed = sync.new_cnc_ranges([{"title": "JSR ST21"}], idx)
+        self.assertEqual(out, [{"name": "Jsr St57 Shadow", "sizes": 1, "from": 360.0, "url": "https://c/jsr-st57-shadow-18x8-5x120-wheel/"}])
+        self.assertEqual(not_listed, 1)

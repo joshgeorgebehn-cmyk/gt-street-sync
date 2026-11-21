@@ -380,3 +380,12 @@ class ExternalTimer(unittest.TestCase):
             self.assertTrue(digest.external_run_recent())
         with mock.patch.object(digest, "gh", side_effect=RuntimeError("no")), mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "x/y"}):
             self.assertFalse(digest.external_run_recent())
+
+
+class FullSweep(unittest.TestCase):
+    def test_only_thursday_3am_is_full(self):
+        t = lambda s: dt.datetime.fromisoformat(s).replace(tzinfo=UTC)
+        self.assertTrue(digest.is_full_sweep("17 16 * * *", t("2026-11-25T16:20:00")))   # Thu 26 Nov 3:17am AEDT
+        self.assertFalse(digest.is_full_sweep("17 16 * * *", t("2026-11-24T16:20:00")))  # Wed 25 Nov 3:17am
+        self.assertFalse(digest.is_full_sweep("17 22 * * *", t("2026-11-25T22:20:00")))  # Thu 9:17am
+        self.assertTrue(digest.is_full_sweep("17 16 * * *", t("2026-11-25T23:00:00")))   # late start still counts

@@ -393,7 +393,7 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
     if manual:
         ok_m = sum(1 for c in manual if c["report"] is not None)
         rows.append(pair_row("Manual runs", f'{len(manual)} run{"s" if len(manual) != 1 else ""} in this period ({ok_m} with a report), included in the totals above'))
-    inner.append(section("Checks", "The four scheduled checks since yesterday 10am.", rows))
+    inner.append(section("Checks", "The four scheduled checks since yesterday 10am. Thursday 3am is the weekly full sweep (every CNC product page).", rows))
 
     # Dealer portals (NYC Dealerline, Equipit): the latest check that read them.
     pc = next((c for c in reversed(checks) if c.get("portals")), None)
@@ -418,6 +418,20 @@ def build(manifest: dict) -> tuple[str, str, dict, bytes]:
                     + (f'. {r["price_error"]}' if r.get("price_error") else ""))))
         note = ("Dealer portal stock is applied." if applied else "Review mode: nothing was changed.")
         inner.append(section("Dealer portals", note, prow))
+
+    # New wheel ranges CNC has added that GT Street does not list (latest check only; reported, never created automatically).
+    latest = m["good"][-1]["report"] if m["good"] else {}
+    nc = [x for x in (latest.get("new_on_cnc") or []) if isinstance(x, dict)]
+    if nc:
+        rows = []
+        for x in nc[:10]:
+            url = safe_url(x.get("url", ""))
+            left = f'<a href="{esc(url)}" style="color:{INK};text-decoration:none">{esc(x.get("name", ""))}</a>' if url else esc(x.get("name", ""))
+            sz = x.get("sizes", 0)
+            rows.append(pair_row(left, f'{sz} size{"s" if sz != 1 else ""}' + (f', from {money(x["from"])}' if x.get("from") else "")))
+        more = f" Showing 10 of {len(nc)}." if len(nc) > 10 else ""
+        inner.append(section("New on CNC, not on GT Street", f"{len(nc)} new wheel range{'s' if len(nc) != 1 else ''} among CNC's newest products.{more} "
+                             "Not added automatically; each needs images, a description and a review first.", rows))
 
     # 1. Things that need a person.
     if m["mismatches"]:

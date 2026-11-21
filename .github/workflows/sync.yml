@@ -1,7 +1,8 @@
 name: Supplier price and stock sync
 run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.source == 'scheduler' && 'Scheduled check (external timer)' || github.event_name == 'schedule' && format('Scheduled sync ({0})', github.event.schedule) || 'Supplier price and stock sync' }}
 
-# Every 6 hours (3:17am, 9:17am, 3:17pm, 9:17pm Sydney): each full run covers every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
+# Every 6 hours (3:17am, 9:17am, 3:17pm, 9:17pm Sydney); the Thursday 3:17am check is the weekly full sweep (every CNC product page).
+# Each run covers every supplier (CNC Wheels, XForce, BC Racing, Alu-Cab, H&R via Revzone)
 # is read live from its own website, nothing cached, and the results are applied to Shopify. Then an independent
 # recheck of every amended product. Nothing is emailed from here: the 10am Daily digest covers every run, manual ones included.
 on:
@@ -48,6 +49,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       go: ${{ steps.gate.outputs.go }}
+      full: ${{ steps.gate.outputs.full }}
     steps:
       - uses: actions/checkout@v4
       - name: "Every 6 hours Sydney time, every supplier"
@@ -102,7 +104,7 @@ jobs:
           MIN_PRICE: ${{ vars.MIN_PRICE || '10' }}
           BIG_DROP: ${{ vars.BIG_DROP || '0.20' }}
           ONLY: ${{ inputs.only || '' }}
-          CNC_FULL: ${{ inputs.full_cnc && '1' || '0' }}
+          CNC_FULL: ${{ (inputs.full_cnc || needs.gate.outputs.full == 'true') && '1' || '0' }}
         run: python3 sync.py
       - name: Sales channel coverage
         if: always()
