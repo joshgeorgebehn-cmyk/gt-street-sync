@@ -5,7 +5,7 @@
 We deliver Australia wide. We do not currently ship overseas.
 
 ## Delivery costs
-Standard delivery is free Australia wide on every order of A$1,000 or more, with no remote area surcharge. Below A$1,000, standard delivery is A$19.95 for most items and A$80 for exhaust systems. The full delivery cost is shown before you pay, and every price includes GST.
+Standard delivery is free Australia wide on every order of A$1,000 or more, with no remote area surcharge. Below A$1,000, standard delivery is A$39.99 for most items and A$80 for exhaust systems. The full delivery cost is shown before you pay, and every price includes GST.
 
 ## Processing times
 In stock orders are usually dispatched within 1 to 3 business days of payment. Orders placed after hours or on weekends and public holidays are processed the next business day.
