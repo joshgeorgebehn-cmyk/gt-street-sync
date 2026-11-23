@@ -31,13 +31,13 @@ REQUIRED = {
                          "abn 82 692 485 868"],
     "PRIVACY_POLICY": ["australian privacy principles", "overseas", "automated decisions", "oaic",
                        "unsubscribe", "gt street rewards", "we do not sell personal information"],
-    "SHIPPING_POLICY": ["full delivery cost is shown before you pay", "australian consumer law"],
+    "SHIPPING_POLICY": ["full delivery cost is shown before you pay", "australian consumer law", "free australia wide on every order of a$299"],
     "REFUND_POLICY": ["australian consumer law", "major failure"],
-    "CONTACT_INFORMATION": ["abn 82 692 485 868", "support@gtstreet.au", "0414 854 221"],
+    "CONTACT_INFORMATION": ["abn 82 692 485 868", "sales@gtstreet.au", "0414 854 221"],
 }
 
 # Phrases that must never appear (old details, risky wording).
-FORBIDDEN = ["sales@gtstreet.au", "continued use of the services constitutes acceptance",
+FORBIDDEN = ["a$10,000 or more ship free", "continued use of the services constitutes acceptance",
              "you agree to indemnify", "have exclusive jurisdiction"]
 
 # Dated legal changes to keep an eye on. Shown by check from 90 days before until 30 days after.

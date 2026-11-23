@@ -12,7 +12,7 @@ East Maitland NSW 2323, Australia
 0414 854 221, 8am to 6pm
 
 **Email**
-support@gtstreet.au
+sales@gtstreet.au
 
 **Instagram**
 instagram.com/gtstreet.au

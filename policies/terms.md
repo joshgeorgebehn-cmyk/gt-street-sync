@@ -60,6 +60,6 @@ We may update these terms. The version that applies to an order is the one publi
 These terms are governed by the laws of New South Wales. You and we submit to the non exclusive jurisdiction of the courts of New South Wales and any court that can hear appeals from them.
 
 ## 17. Contact
-GT Street Pty Ltd, East Maitland NSW 2323. support@gtstreet.au or 0414 854 221, 8am to 6pm.
+GT Street Pty Ltd, East Maitland NSW 2323. sales@gtstreet.au or 0414 854 221, 8am to 6pm.
 
 Version 2.0. Last updated 23/11/2026.

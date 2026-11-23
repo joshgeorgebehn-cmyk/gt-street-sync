@@ -48,15 +48,15 @@ Our site uses cookies to keep your cart, remember preferences and measure how th
 We use secure, access controlled systems and limit access to staff and providers who need it. We keep information only as long as we need it for the purposes above or as the law requires (for example, tax and promotion records), then delete or de-identify it.
 
 ## Access, correction and deletion
-You can ask for a copy of the personal information we hold about you, ask us to correct it, or ask us to delete it where we do not need to keep it. Email support@gtstreet.au. We respond within 30 days and may need to confirm your identity first. There is no charge for a request.
+You can ask for a copy of the personal information we hold about you, ask us to correct it, or ask us to delete it where we do not need to keep it. Email sales@gtstreet.au. We respond within 30 days and may need to confirm your identity first. There is no charge for a request.
 
 ## Complaints
-If you have a privacy concern, email support@gtstreet.au with the details. We will acknowledge it within 5 business days and aim to resolve it within 30 days. If you are not satisfied, you can contact the Office of the Australian Information Commissioner at [oaic.gov.au](https://www.oaic.gov.au) or on 1300 363 992.
+If you have a privacy concern, email sales@gtstreet.au with the details. We will acknowledge it within 5 business days and aim to resolve it within 30 days. If you are not satisfied, you can contact the Office of the Australian Information Commissioner at [oaic.gov.au](https://www.oaic.gov.au) or on 1300 363 992.
 
 ## Changes
 We may update this policy. The current version and its date are always shown below.
 
 ## Contact
-GT Street Pty Ltd, East Maitland NSW 2323. support@gtstreet.au or 0414 854 221, 8am to 6pm.
+GT Street Pty Ltd, East Maitland NSW 2323. sales@gtstreet.au or 0414 854 221, 8am to 6pm.
 
 Version 2.0. Last updated 23/11/2026.
