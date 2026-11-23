@@ -31,7 +31,7 @@ REQUIRED = {
                          "abn 82 692 485 868"],
     "PRIVACY_POLICY": ["australian privacy principles", "overseas", "automated decisions", "oaic",
                        "unsubscribe", "gt street rewards", "we do not sell personal information"],
-    "SHIPPING_POLICY": ["full delivery cost is shown before you pay", "australian consumer law", "free australia wide on every order of a$299"],
+    "SHIPPING_POLICY": ["full delivery cost is shown before you pay", "australian consumer law", "free australia wide on every order of a$1,000"],
     "REFUND_POLICY": ["australian consumer law", "major failure"],
     "CONTACT_INFORMATION": ["abn 82 692 485 868", "sales@gtstreet.au", "0414 854 221"],
 }
