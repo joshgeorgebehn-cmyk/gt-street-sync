@@ -130,3 +130,12 @@ and does not stop the real digest going out later. Dry run reports are never cou
 
 CNC has no product description field. The only copy on its pages is a short SEO snippet; the script keeps its first sentence when that
 sentence is complete and not about one size (class `cnc-intro`, first paragraph) and leaves out snippets that are cut off or mention sizes or social handles.
+
+## Store policies (policies.py)
+
+`policies/*.md` are the source of truth for the Contact, Shipping, Terms of service and Privacy pages in Shopify.
+Edit a file (bump its version and "Last updated" date), push to main, and the Store policies workflow updates
+Shopify. It also runs every Monday: it compares the live pages with the files, checks required Australian
+Consumer Law and privacy wording, flags any page older than 12 months and lists legal changes coming up, opening
+a GitHub issue if anything needs attention. The refund policy is lawyer approved and edited in Shopify; it is
+checked but never pushed. Pushing needs the `write_legal_policies` scope on the Shopify app.

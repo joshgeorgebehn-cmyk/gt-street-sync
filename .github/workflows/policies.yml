@@ -1,0 +1,43 @@
+name: Store policies
+# Source of truth: policies/*.md. Pushing a change to those files updates the Shopify policy pages
+# (the Shopify app needs the write_legal_policies scope). Every Monday 8:43am Sydney the live pages are
+# checked against the files, required wording, the 12 month review date and upcoming legal changes;
+# anything that needs attention opens or updates a GitHub issue.
+on:
+  push:
+    branches: [main]
+    paths: ["policies/**", "policies.py"]
+  schedule:
+    - cron: "43 21 * * 0"   # Monday 8:43am AEDT (7:43am AEST)
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "check or push"
+        type: choice
+        options: [check, push]
+        default: check
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  policies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+      SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+      SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+      SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Push policy files to Shopify
+        if: github.event_name == 'push' || inputs.action == 'push'
+        run: python3 policies.py push
+      - name: Check live policies
+        run: python3 policies.py check
